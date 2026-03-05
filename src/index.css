@@ -1,0 +1,48 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply antialiased bg-[#F8F9FA] text-[#1A1A1A];
+  }
+}
+
+@layer utilities {
+  .bg-mesh {
+    background-color: #F8F9FA;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(90, 125, 74, 0.05) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(0, 0, 0, 0.02) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(90, 125, 74, 0.05) 0px, transparent 50%),
+      radial-gradient(at 0% 100%, rgba(0, 0, 0, 0.02) 0px, transparent 50%);
+    background-size: 200% 200%;
+    animation: mesh-float 20s ease infinite;
+  }
+
+  @keyframes mesh-float {
+    0% { background-position: 0% 0%; }
+    50% { background-position: 100% 100%; }
+    100% { background-position: 0% 0%; }
+  }
+
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-xl shadow-black/5;
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-br from-[#5A7D4A] to-[#3D5432];
+  }
+
+  .gradient-sidebar {
+    background: linear-gradient(180deg, #1A1A1A 0%, #2D2D2D 100%);
+  }
+
+  .gradient-header {
+    background: linear-gradient(90deg, #5A7D4A 0%, #7A9D6A 100%);
+  }
+}

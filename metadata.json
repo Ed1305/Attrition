@@ -1,0 +1,5 @@
+{
+  "name": "Attrition Report",
+  "description": "An application to process employee attrition data from Excel files, extracting employee details, status, and attendance patterns from the INVNT CAPE TOWN sheet.",
+  "requestFramePermissions": []
+}
