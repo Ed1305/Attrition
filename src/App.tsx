@@ -54,6 +54,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [currentReportId, setCurrentReportId] = useState<number | null>(null);
   const [missingReport, setMissingReport] = useState<{ hasReport: boolean, period: string } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -122,6 +123,7 @@ export default function App() {
         const data = await res.json();
         setReport(data.data);
         setSelectedPeriod(data.period);
+        setCurrentReportId(id);
         
         const branches = Array.from(new Set(data.data.records.map((r: any) => r.branch)));
         if (branches.length > 0) {
@@ -129,7 +131,7 @@ export default function App() {
         }
         
         setShowSummary(true);
-        setActiveTab('upload');
+        setActiveTab('dashboard');
       }
     } catch (err) {
       setError("Failed to load report from history");
@@ -151,6 +153,10 @@ export default function App() {
           if (res.ok) {
             fetchHistory();
             checkMonthlyStatus();
+            if (currentReportId === id) {
+              setReport(null);
+              setCurrentReportId(null);
+            }
           }
         } catch (err) {
           console.error("Failed to delete report", err);
@@ -171,6 +177,8 @@ export default function App() {
           if (res.ok) {
             fetchHistory();
             checkMonthlyStatus();
+            setReport(null);
+            setCurrentReportId(null);
           }
         } catch (err) {
           console.error("Failed to purge history", err);
@@ -210,6 +218,7 @@ export default function App() {
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
+      setCurrentReportId(null); // New upload, not from history
       
       const allRecords: EmployeeRecord[] = [];
       let globalAttendanceColumns: string[] = [];
@@ -252,8 +261,8 @@ export default function App() {
         });
         const managerIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('MANAGER'));
         const termIdx = headerRow.findIndex((h: any) => {
-          const s = String(h).toUpperCase();
-          return s.includes('TERMINATE') || s.includes('TERMINATION');
+          const s = String(h).toUpperCase().replace(/\s+/g, ' ');
+          return s === 'TERMINATION DATE' || s.includes('TERMINATION DATE') || s.includes('TERM DATE') || s.includes('TERMINATE') || s.includes('TERMINATION');
         });
 
         const startDayIdx = subHeaderRow.findIndex(h => String(h).trim() === '26');
@@ -333,10 +342,14 @@ export default function App() {
             if (excludedValues.some(val => upperEmpName.includes(val.toUpperCase()))) continue;
             if (targetTeams.some(team => upperEmpName === team)) continue;
 
+            const rawEndDate = termIdx !== -1 ? row[termIdx] : null;
+            const hasTerminationDate = rawEndDate && String(rawEndDate).trim() !== '' && String(rawEndDate).trim().toUpperCase() !== 'N/A' && String(rawEndDate).trim().toUpperCase() !== 'NOT APPLICABLE';
+
             const isInactive = currentTeam.toUpperCase().includes('RESIGNED') || 
                               currentTeam.toUpperCase().includes('AWOL') ||
                               currentTeam.toUpperCase().includes('DROPPED') ||
-                              currentTeam.toUpperCase().includes('TERMINATED');
+                              currentTeam.toUpperCase().includes('TERMINATED') ||
+                              hasTerminationDate;
             
             const status = isInactive ? 'INACTIVE' : 'ACTIVE';
             
@@ -345,6 +358,7 @@ export default function App() {
             else if (currentTeam.toUpperCase().includes('AWOL')) category = 'AWOL';
             else if (currentTeam.toUpperCase().includes('DROPPED')) category = 'DROPPED_OUT';
             else if (currentTeam.toUpperCase().includes('TERMINATED')) category = 'TERMINATED';
+            else if (hasTerminationDate) category = 'TERMINATED';
 
             let baseTeam = '';
             
@@ -433,15 +447,16 @@ export default function App() {
               }
             }
 
-            const rawEndDate = row[termIdx];
             const formattedEndDate = isInactive 
-              ? (rawEndDate ? (typeof rawEndDate === 'number' ? new Date(Math.round((rawEndDate - 25569) * 86400 * 1000)).toLocaleDateString() : String(rawEndDate)) : 'N/A')
+              ? (rawEndDate && String(rawEndDate).trim() !== '' && String(rawEndDate).trim().toUpperCase() !== 'N/A' && String(rawEndDate).trim().toUpperCase() !== 'NOT APPLICABLE'
+                  ? (typeof rawEndDate === 'number' ? new Date(Math.round((rawEndDate - 25569) * 86400 * 1000)).toLocaleDateString('en-GB') : String(rawEndDate)) 
+                  : 'N/A')
               : 'Not Applicable';
 
             allRecords.push({
               empCode: empCode,
               employeeName: empName,
-              startDate: row[startIdx] ? (typeof row[startIdx] === 'number' ? new Date(Math.round((row[startIdx] - 25569) * 86400 * 1000)).toLocaleDateString() : String(row[startIdx])) : 'N/A',
+              startDate: row[startIdx] ? (typeof row[startIdx] === 'number' ? new Date(Math.round((row[startIdx] - 25569) * 86400 * 1000)).toLocaleDateString('en-GB') : String(row[startIdx])) : 'N/A',
               team: displayTeam,
               baseTeam: baseTeam,
               status: status,
@@ -845,6 +860,28 @@ export default function App() {
         }}
         onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
       />
+
+      {/* Loading Overlay */}
+      <AnimatePresence>
+        {(isProcessing || isSaving) && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/20 backdrop-blur-sm"
+          >
+            <div className="bg-white p-8 rounded-[32px] shadow-2xl flex flex-col items-center gap-4">
+              <div className="relative">
+                <div className="w-12 h-12 border-4 border-[#5A7D4A]/20 border-t-[#5A7D4A] rounded-full animate-spin" />
+                <RefreshCw className="absolute inset-0 m-auto text-[#5A7D4A] animate-pulse" size={20} />
+              </div>
+              <p className="text-xs font-bold uppercase tracking-widest text-[#5A7D4A]">
+                {isProcessing ? "Processing Data..." : "Saving Report..."}
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Login Modal */}
       <AnimatePresence>
