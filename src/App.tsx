@@ -70,8 +70,24 @@ export default function App() {
   });
 
   useEffect(() => {
-    fetchHistory();
-    checkMonthlyStatus();
+    const init = async () => {
+      await fetchHistory();
+      await checkMonthlyStatus();
+      
+      // Automatically load the latest report for the dashboard
+      try {
+        const res = await fetch('/api/reports');
+        if (res.ok) {
+          const historyData = await res.json();
+          if (historyData.length > 0) {
+            loadReportFromHistory(historyData[0].id);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to auto-load latest report", err);
+      }
+    };
+    init();
   }, []);
 
   const handleLogin = () => {
@@ -663,6 +679,7 @@ export default function App() {
                 saveReport={saveReport}
                 isSaving={isSaving}
                 setReport={setReport}
+                isAdmin={isAdmin}
               />
             )}
             {activeTab === 'upload' && isAdmin && (
@@ -949,7 +966,8 @@ function DashboardView({
   downloadReport,
   saveReport,
   isSaving,
-  setReport
+  setReport,
+  isAdmin
 }: { 
   history: ReportSummary[], 
   onLoadReport: (id: number) => void,
@@ -962,7 +980,8 @@ function DashboardView({
   downloadReport: () => void,
   saveReport: () => void,
   isSaving: boolean,
-  setReport: (r: ProcessedReport | null) => void
+  setReport: (r: ProcessedReport | null) => void,
+  isAdmin: boolean
 }) {
   return (
     <motion.div 
@@ -972,9 +991,19 @@ function DashboardView({
       className="space-y-8"
     >
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-black/10 pb-4 mb-8">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight gradient-text">System Dashboard</h1>
-          <p className="text-[10px] text-black/50 mt-1 uppercase tracking-widest font-bold">Real-time Attrition Overview</p>
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 bg-gradient-to-br from-[#5A7D4A] to-[#7A9D6A] rounded-2xl flex items-center justify-center text-white shadow-xl shadow-[#5A7D4A]/20">
+            <BarChart3 size={24} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl font-bold tracking-tight gradient-text">System Dashboard</h1>
+              {report && history.length > 0 && history[0].period === selectedPeriod && (
+                <span className="bg-emerald-500 text-white text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full animate-pulse">Latest</span>
+              )}
+            </div>
+            <p className="text-[10px] text-black/50 mt-1 uppercase tracking-widest font-bold">Real-time Attrition Overview</p>
+          </div>
         </div>
         
         {report && (
@@ -994,14 +1023,16 @@ function DashboardView({
               ))}
             </div>
             <div className="flex gap-3">
-              <button
-                onClick={saveReport}
-                disabled={isSaving}
-                className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
-              >
-                <Save size={14} />
-                {isSaving ? "Saving..." : "Save"}
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={saveReport}
+                  disabled={isSaving}
+                  className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
+                >
+                  <Save size={14} />
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              )}
               <button
                 onClick={() => setShowSummary(!showSummary)}
                 className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full hover:bg-black/80 transition-all text-xs font-bold shadow-lg shadow-black/10"
