@@ -9,6 +9,7 @@ export interface EmployeeRecord {
   basedHeadcount: string;
   endDate: string;
   attendance: Record<string, number | string>;
+  branch: string;
 }
 
 export interface ProcessedReport {
