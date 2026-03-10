@@ -1,54 +1,50 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
+import { createClient } from "@supabase/supabase-js";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("attrition.db");
-
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fileName TEXT,
-    period TEXT,
-    data TEXT,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  
-  CREATE TABLE IF NOT EXISTS reminders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    period TEXT UNIQUE,
-    sentAt DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    smtp_host TEXT,
-    smtp_port INTEGER,
-    smtp_user TEXT,
-    smtp_pass TEXT,
-    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  -- Initialize default settings if not exists
-  INSERT OR IGNORE INTO settings (id, smtp_host, smtp_port, smtp_user, smtp_pass)
-  VALUES (1, 'smtp.gmail.com', 587, '', '');
-`);
+// Supabase Client Initialization
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 import nodemailer from "nodemailer";
 
 async function getSMTPSettings() {
-  const settings = db.prepare("SELECT * FROM settings WHERE id = 1").get() as any;
-  return {
-    host: settings?.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: Number(settings?.smtp_port || process.env.SMTP_PORT || 587),
-    user: settings?.smtp_user || process.env.SMTP_USER,
-    pass: settings?.smtp_pass || process.env.SMTP_PASS,
-  };
+  try {
+    const { data: settings, error } = await supabase
+      .from('settings')
+      .select('*')
+      .eq('id', 1)
+      .single();
+
+    if (error || !settings) {
+      return {
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: Number(process.env.SMTP_PORT || 587),
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      };
+    }
+
+    return {
+      host: settings.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: Number(settings.smtp_port || process.env.SMTP_PORT || 587),
+      user: settings.smtp_user || process.env.SMTP_USER,
+      pass: settings.smtp_pass || process.env.SMTP_PASS,
+    };
+  } catch (err) {
+    return {
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: Number(process.env.SMTP_PORT || 587),
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    };
+  }
 }
 
 async function sendReminderEmail(period: string) {
@@ -90,7 +86,7 @@ async function sendReminderEmail(period: string) {
       `,
     });
     console.log(`Reminder email sent for ${period}`);
-    db.prepare("INSERT INTO reminders (period) VALUES (?)").run(period);
+    await supabase.from('reminders').insert({ period });
   } catch (error) {
     console.error("Failed to send reminder email:", error);
   }
@@ -101,11 +97,20 @@ async function checkAndSendReminders() {
   const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   
   // Check if report exists for current period
-  const report = db.prepare("SELECT id FROM reports WHERE period = ?").get(currentPeriod);
+  const { data: report } = await supabase
+    .from('reports')
+    .select('id')
+    .eq('period', currentPeriod)
+    .single();
   
   if (!report) {
     // Check if reminder already sent
-    const reminder = db.prepare("SELECT id FROM reminders WHERE period = ?").get(currentPeriod);
+    const { data: reminder } = await supabase
+      .from('reminders')
+      .select('id')
+      .eq('period', currentPeriod)
+      .single();
+
     if (!reminder) {
       await sendReminderEmail(currentPeriod);
     }
@@ -123,65 +128,98 @@ async function startServer() {
   setInterval(checkAndSendReminders, 12 * 60 * 60 * 1000);
 
   // API Routes
-  app.get("/api/status/current-month", (req, res) => {
+  app.get("/api/status/current-month", async (req, res) => {
     try {
       const now = new Date();
       const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const report = db.prepare("SELECT id FROM reports WHERE period = ?").get(currentPeriod);
+      const { data: report } = await supabase
+        .from('reports')
+        .select('id')
+        .eq('period', currentPeriod)
+        .single();
       res.json({ hasReport: !!report, period: currentPeriod });
     } catch (err) {
       res.status(500).json({ error: "Failed to check status" });
     }
   });
-  app.get("/api/reports", (req, res) => {
+
+  app.get("/api/reports", async (req, res) => {
     try {
-      const reports = db.prepare("SELECT id, fileName, period, createdAt FROM reports ORDER BY createdAt DESC").all();
+      const { data: reports, error } = await supabase
+        .from('reports')
+        .select('id, fileName, period, createdAt')
+        .order('createdAt', { ascending: false });
+      
+      if (error) throw error;
       res.json(reports);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch reports" });
     }
   });
 
-  app.get("/api/reports/:id", (req, res) => {
+  app.get("/api/reports/:id", async (req, res) => {
     try {
-      const report = db.prepare("SELECT * FROM reports WHERE id = ?").get(req.params.id);
-      if (!report) return res.status(404).json({ error: "Report not found" });
+      const { data: report, error } = await supabase
+        .from('reports')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+
+      if (error || !report) return res.status(404).json({ error: "Report not found" });
+      
       res.json({
         ...report,
-        data: JSON.parse(report.data as string)
+        data: typeof report.data === 'string' ? JSON.parse(report.data) : report.data
       });
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch report" });
     }
   });
 
-  app.post("/api/reports", (req, res) => {
+  app.post("/api/reports", async (req, res) => {
     try {
       const { fileName, period, data } = req.body;
-      const info = db.prepare("INSERT INTO reports (fileName, period, data) VALUES (?, ?, ?)").run(
-        fileName,
-        period,
-        JSON.stringify(data)
-      );
-      res.json({ id: info.lastInsertRowid });
+      const { data: newReport, error } = await supabase
+        .from('reports')
+        .insert({
+          fileName,
+          period,
+          data: data // Supabase handles JSON objects directly if column type is jsonb
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json({ id: newReport.id });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to save report" });
     }
   });
 
-  app.delete("/api/reports/:id", (req, res) => {
+  app.delete("/api/reports/:id", async (req, res) => {
     try {
-      db.prepare("DELETE FROM reports WHERE id = ?").run(req.params.id);
+      const { error } = await supabase
+        .from('reports')
+        .delete()
+        .eq('id', req.params.id);
+      
+      if (error) throw error;
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to delete report" });
     }
   });
 
-  app.delete("/api/reports-purge/all", (req, res) => {
+  app.delete("/api/reports-purge/all", async (req, res) => {
     try {
-      db.prepare("DELETE FROM reports").run();
+      // Note: Purge all might require a different approach in Supabase depending on RLS
+      const { error } = await supabase
+        .from('reports')
+        .delete()
+        .neq('id', 0); // Delete all where id != 0
+      
+      if (error) throw error;
       res.json({ success: true, message: "All reports purged successfully" });
     } catch (err) {
       res.status(500).json({ error: "Failed to purge reports" });
@@ -189,23 +227,36 @@ async function startServer() {
   });
 
   // Settings Routes
-  app.get("/api/settings", (req, res) => {
+  app.get("/api/settings", async (req, res) => {
     try {
-      const settings = db.prepare("SELECT smtp_host, smtp_port, smtp_user, smtp_pass FROM settings WHERE id = 1").get();
+      const { data: settings, error } = await supabase
+        .from('settings')
+        .select('smtp_host, smtp_port, smtp_user, smtp_pass')
+        .eq('id', 1)
+        .single();
+      
+      if (error) throw error;
       res.json(settings);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
   });
 
-  app.post("/api/settings", (req, res) => {
+  app.post("/api/settings", async (req, res) => {
     try {
       const { smtp_host, smtp_port, smtp_user, smtp_pass } = req.body;
-      db.prepare(`
-        UPDATE settings 
-        SET smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, updatedAt = CURRENT_TIMESTAMP 
-        WHERE id = 1
-      `).run(smtp_host, smtp_port, smtp_user, smtp_pass);
+      const { error } = await supabase
+        .from('settings')
+        .upsert({ 
+          id: 1,
+          smtp_host, 
+          smtp_port, 
+          smtp_user, 
+          smtp_pass, 
+          updatedAt: new Date().toISOString() 
+        });
+      
+      if (error) throw error;
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to update settings" });

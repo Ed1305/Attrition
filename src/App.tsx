@@ -51,11 +51,12 @@ export default function App() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [currentReportId, setCurrentReportId] = useState<number | null>(null);
   const [missingReport, setMissingReport] = useState<{ hasReport: boolean, period: string } | null>(null);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -89,6 +90,11 @@ export default function App() {
     };
     init();
   }, []);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   const handleLogin = () => {
     if (passcode === 'ak_2026!') {
@@ -219,10 +225,13 @@ export default function App() {
       if (res.ok) {
         fetchHistory();
         checkMonthlyStatus();
-        alert("Report saved successfully to history!");
+        showToast("Report saved successfully!");
+      } else {
+        showToast("Failed to save report", "error");
       }
     } catch (err) {
-      setError("Failed to save report");
+      console.error("Failed to save report", err);
+      showToast("Error saving report", "error");
     } finally {
       setIsSaving(false);
     }
@@ -277,8 +286,8 @@ export default function App() {
         });
         const managerIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('MANAGER'));
         const termIdx = headerRow.findIndex((h: any) => {
-          const s = String(h).toUpperCase().replace(/\s+/g, ' ');
-          return s === 'TERMINATION DATE' || s.includes('TERMINATION DATE') || s.includes('TERM DATE') || s.includes('TERMINATE') || s.includes('TERMINATION');
+          const s = String(h).toUpperCase().replace(/[^A-Z]/g, '');
+          return s === 'TERMINATIONDATE' || s.includes('TERMINATIONDATE') || s.includes('TERMDATE') || s.includes('TERMINATE') || s.includes('TERMINATION');
         });
 
         const startDayIdx = subHeaderRow.findIndex(h => String(h).trim() === '26');
@@ -866,6 +875,24 @@ export default function App() {
         </div>
       </main>
 
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 20, x: '-50%' }}
+            className={cn(
+              "fixed bottom-8 left-1/2 z-[300] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 font-bold text-xs uppercase tracking-widest",
+              toast.type === 'success' ? "bg-[#5A7D4A] text-white" : "bg-red-600 text-white"
+            )}
+          >
+            {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <ConfirmModal 
         isOpen={confirmModal.isOpen}
         title={confirmModal.title}
@@ -1065,8 +1092,10 @@ function DashboardView({
           <div className="glass-card p-8 rounded-[32px]">
             <div className="flex items-center justify-between mb-8">
               <div>
-                <h2 className="text-xl font-bold">Recent Reports</h2>
-                <p className="text-[10px] text-black/50 uppercase tracking-widest font-bold">Quick access to latest data</p>
+                <h2 className="text-xl font-bold">{isAdmin ? "Recent Reports" : "Awaiting Report"}</h2>
+                <p className="text-[10px] text-black/50 uppercase tracking-widest font-bold">
+                  {isAdmin ? "Quick access to latest data" : "The monthly attrition report is currently being prepared"}
+                </p>
               </div>
               <div className="p-2 bg-black/5 rounded-xl">
                 <History size={18} className="text-black/40" />
@@ -1075,7 +1104,9 @@ function DashboardView({
 
             {history.length === 0 ? (
               <div className="text-center py-12 border-2 border-dashed border-black/5 rounded-2xl">
-                <p className="text-xs font-bold uppercase tracking-widest text-black/20">No reports available yet</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-black/20">
+                  {isAdmin ? "No reports available yet" : "Please check back shortly for the latest analytics"}
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
