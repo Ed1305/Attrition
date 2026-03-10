@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
@@ -8,8 +9,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Supabase Client Initialization
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 import nodemailer from "nodemailer";
@@ -117,15 +118,25 @@ async function checkAndSendReminders() {
   }
 }
 
-async function startServer() {
+async function createServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json({ limit: '50mb' }));
 
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", supabaseConfigured: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) });
+  });
+
   // Run reminder check on start and every 12 hours
-  checkAndSendReminders();
-  setInterval(checkAndSendReminders, 12 * 60 * 60 * 1000);
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    checkAndSendReminders().catch(err => console.error("Initial reminder check failed:", err));
+    if (process.env.NODE_ENV !== "production") {
+      setInterval(checkAndSendReminders, 12 * 60 * 60 * 1000);
+    }
+  } else {
+    console.warn("Supabase not configured. Reminders and database features will not work.");
+  }
 
   // API Routes
   app.get("/api/status/current-month", async (req, res) => {
@@ -178,13 +189,14 @@ async function startServer() {
 
   app.post("/api/reports", async (req, res) => {
     try {
-      const { fileName, period, data } = req.body;
+      const { fileName, period, data, author } = req.body;
       const { data: newReport, error } = await supabase
         .from('reports')
         .insert({
           fileName,
           period,
-          data: data // Supabase handles JSON objects directly if column type is jsonb
+          data: data, // Supabase handles JSON objects directly if column type is jsonb
+          author: author || "System Admin"
         })
         .select()
         .single();
@@ -303,9 +315,18 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  return app;
+}
+
+// For local development and AI Studio
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  createServer().then(app => {
+    const PORT = 3000;
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   });
 }
 
-startServer();
+// Export for Vercel
+export default createServer;

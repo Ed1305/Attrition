@@ -4,6 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Google AI Studio App</title>
+    <script>
+      // Silence Vite HMR connection errors in AI Studio environment
+      if (window.location.hostname.includes('run.app') || window.location.hostname.includes('localhost')) {
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        const originalLog = console.log;
+        
+        const isViteError = (args) => {
+          const msg = args.join(' ');
+          return msg.includes('[vite] failed to connect to websocket') || 
+                 msg.includes('WebSocket closed without opened') ||
+                 msg.includes('[vite] connecting...') ||
+                 msg.includes('failed to connect to websocket');
+        };
+
+        console.error = (...args) => {
+          if (isViteError(args)) return;
+          originalError.apply(console, args);
+        };
+        
+        console.warn = (...args) => {
+          if (isViteError(args)) return;
+          originalWarn.apply(console, args);
+        };
+
+        console.log = (...args) => {
+          if (isViteError(args)) return;
+          originalLog.apply(console, args);
+        };
+
+        // Also catch unhandled rejections from Vite
+        window.addEventListener('unhandledrejection', (event) => {
+          if (event.reason && event.reason.message && (event.reason.message.includes('WebSocket') || event.reason.message.includes('vite'))) {
+            event.preventDefault();
+          }
+        });
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
+import { supabase as supabaseClient } from './supabase';
 import { EmployeeRecord, ProcessedReport, ReportSummary, SavedReport } from './types';
 
 type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support' | 'settings';
@@ -39,7 +40,12 @@ type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support' | 's
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [report, setReport] = useState<ProcessedReport | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('isAdmin') === 'true';
+    }
+    return false;
+  });
   const [passcode, setPasscode] = useState('');
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
@@ -70,10 +76,14 @@ export default function App() {
     onConfirm: () => {},
   });
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<boolean | null>(null);
+
   useEffect(() => {
     const init = async () => {
       await fetchHistory();
       await checkMonthlyStatus();
+      await checkSupabaseStatus();
       
       // Automatically load the latest report for the dashboard
       try {
@@ -89,7 +99,55 @@ export default function App() {
       }
     };
     init();
+
+    // Set up real-time listener for reports
+    const channel = supabaseClient
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'reports'
+        },
+        (payload) => {
+          console.log('Real-time change received:', payload);
+          fetchHistory();
+          checkMonthlyStatus();
+          showToast("Cloud data updated", "success");
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
   }, []);
+
+  const checkSupabaseStatus = async () => {
+    try {
+      const res = await fetch('/api/health');
+      const backendConfigured = res.ok ? (await res.json()).supabaseConfigured : false;
+      const frontendConfigured = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+      
+      setSupabaseStatus(backendConfigured && frontendConfigured);
+      
+      if (backendConfigured && !frontendConfigured) {
+        console.warn("Supabase backend is configured, but frontend keys are missing. Real-time updates will not work.");
+      }
+    } catch (err) {
+      setSupabaseStatus(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchHistory();
+    await checkMonthlyStatus();
+    await checkSupabaseStatus();
+    setIsRefreshing(false);
+    showToast("Data refreshed from cloud");
+  };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -99,8 +157,10 @@ export default function App() {
   const handleLogin = () => {
     if (passcode === 'ak_2026!') {
       setIsAdmin(true);
+      localStorage.setItem('isAdmin', 'true');
       setShowLoginModal(false);
       setPasscode('');
+      showToast("Admin access granted");
     } else {
       alert('Incorrect passcode');
     }
@@ -108,9 +168,11 @@ export default function App() {
 
   const logout = () => {
     setIsAdmin(false);
+    localStorage.removeItem('isAdmin');
     if (['upload', 'settings'].includes(activeTab)) {
       setActiveTab('dashboard');
     }
+    showToast("Logged out");
   };
 
   const checkMonthlyStatus = async () => {
@@ -689,6 +751,9 @@ export default function App() {
                 isSaving={isSaving}
                 setReport={setReport}
                 isAdmin={isAdmin}
+                supabaseStatus={supabaseStatus}
+                handleRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
               />
             )}
             {activeTab === 'upload' && isAdmin && (
@@ -994,7 +1059,10 @@ function DashboardView({
   saveReport,
   isSaving,
   setReport,
-  isAdmin
+  isAdmin,
+  supabaseStatus,
+  handleRefresh,
+  isRefreshing
 }: { 
   history: ReportSummary[], 
   onLoadReport: (id: number) => void,
@@ -1008,7 +1076,10 @@ function DashboardView({
   saveReport: () => void,
   isSaving: boolean,
   setReport: (r: ProcessedReport | null) => void,
-  isAdmin: boolean
+  isAdmin: boolean,
+  supabaseStatus: boolean | null,
+  handleRefresh: () => void,
+  isRefreshing: boolean
 }) {
   return (
     <motion.div 
@@ -1053,11 +1124,15 @@ function DashboardView({
               {isAdmin && (
                 <button
                   onClick={saveReport}
-                  disabled={isSaving}
-                  className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
+                  disabled={isSaving || !supabaseStatus}
+                  className={cn(
+                    "flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold",
+                    !supabaseStatus && "opacity-50 cursor-not-allowed"
+                  )}
+                  title={!supabaseStatus ? "Cloud connection required to save" : "Save to cloud history"}
                 >
-                  <Save size={14} />
-                  {isSaving ? "Saving..." : "Save"}
+                  <Save size={14} className={cn(isSaving && "animate-pulse")} />
+                  {isSaving ? "Syncing..." : "Save to Cloud"}
                 </button>
               )}
               <button
@@ -1092,10 +1167,32 @@ function DashboardView({
           <div className="glass-card p-8 rounded-[32px]">
             <div className="flex items-center justify-between mb-8">
               <div>
-                <h2 className="text-xl font-bold">{isAdmin ? "Recent Reports" : "Awaiting Report"}</h2>
-                <p className="text-[10px] text-black/50 uppercase tracking-widest font-bold">
-                  {isAdmin ? "Quick access to latest data" : "The monthly attrition report is currently being prepared"}
-                </p>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-bold">{isAdmin ? "Recent Reports" : "Awaiting Report"}</h2>
+                  <button 
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    className={cn("p-1.5 bg-black/5 rounded-lg hover:bg-black/10 transition-all", isRefreshing && "animate-spin")}
+                    title="Refresh from cloud"
+                  >
+                    <RefreshCw size={14} className="text-black/40" />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-[10px] text-black/50 uppercase tracking-widest font-bold">
+                    {isAdmin ? "Quick access to latest data" : "The monthly attrition report is currently being prepared"}
+                  </p>
+                  {supabaseStatus === true && (
+                    <span className="flex items-center gap-1 text-[8px] font-bold text-emerald-600 uppercase tracking-tighter bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                      <ShieldCheck size={8} /> Cloud Sync Active
+                    </span>
+                  )}
+                  {supabaseStatus === false && (
+                    <span className="flex items-center gap-1 text-[8px] font-bold text-amber-600 uppercase tracking-tighter bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100">
+                      <AlertCircle size={8} /> Local Mode Only
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="p-2 bg-black/5 rounded-xl">
                 <History size={18} className="text-black/40" />
