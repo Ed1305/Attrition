@@ -591,24 +591,108 @@ export default function App() {
 
   const downloadReport = () => {
     if (!report) return;
+
+    const wb = XLSX.utils.book_new();
+    const activeBranch = selectedBranch || (report.records.length > 0 ? report.records[0].branch : '');
+    const filteredRecords = report.records.filter(r => r.branch === activeBranch);
+    
+    const isAlpha = activeBranch === 'ALPHA';
+    const teams = isAlpha 
+      ? ['TEAM AYABONGA', 'TEAM ISIPHO', 'TEAM KHAYALETHU', 'TEAM THANDUXOLO', 'ALPHA INCUBATION']
+      : ['TEAM MOSES', 'TEAM PROSPER', 'TEAM SONWABILE', 'INVNT INCUBATION'];
+
+    const getTeamLabel = (t: string) => {
+      if (t === 'INVNT INCUBATION' || t === 'ALPHA INCUBATION') return 'Incubation';
+      return t.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    };
+
+    // --- 1. Summary Sheet ---
+    const summaryRows: any[][] = [
+      [`ATTRITION SUMMARY REPORT - ${activeBranch}`],
+      [`Generated on: ${new Date().toLocaleString()}`],
+      [`Reporting Period: ${selectedPeriod}`],
+      [],
+      ['SECTION 1: HEADCOUNT & ATTRITION BY TEAM'],
+      ['Category', ...teams.map(getTeamLabel), 'Grand Total']
+    ];
+
+    const getCount = (t: string, cat: string) => filteredRecords.filter(r => (r.baseTeam === t || r.baseTeam.includes(t.replace('TEAM ', ''))) && r.category === cat).length;
+    
+    const categories = [
+      { label: 'Active Employees', cat: 'ACTIVE' },
+      { label: 'AWOL Employees', cat: 'AWOL' },
+      { label: 'Resigned Employees', cat: 'RESIGNED' },
+      { label: 'Dropped Out (Incubation)', cat: 'DROPPED_OUT' },
+      { label: 'Terminated', cat: 'TERMINATED' }
+    ];
+
+    categories.forEach(cat => {
+      const row = [cat.label];
+      teams.forEach(t => row.push(getCount(t, cat.cat)));
+      row.push(filteredRecords.filter(r => r.category === cat.cat).length);
+      summaryRows.push(row);
+    });
+
+    const totalRow = ['TOTAL HEADCOUNT'];
+    teams.forEach(t => {
+      const teamTotal = filteredRecords.filter(r => (r.baseTeam === t || r.baseTeam.includes(t.replace('TEAM ', ''))) && ['ACTIVE', 'AWOL', 'RESIGNED'].includes(r.category)).length;
+      totalRow.push(teamTotal);
+    });
+    totalRow.push(filteredRecords.filter(r => ['ACTIVE', 'AWOL', 'RESIGNED'].includes(r.category)).length);
+    summaryRows.push(totalRow);
+
+    summaryRows.push([]);
+    summaryRows.push(['SECTION 2: ATTRITION RATES']);
+    summaryRows.push(['Metric', ...teams.map(getTeamLabel), 'Grand Total']);
+
+    const attritionRow = ['Attrition Rate (%)'];
+    teams.forEach(t => {
+      const teamTotal = filteredRecords.filter(r => (r.baseTeam === t || r.baseTeam.includes(t.replace('TEAM ', ''))) && ['ACTIVE', 'AWOL', 'RESIGNED'].includes(r.category)).length;
+      const teamAttrition = filteredRecords.filter(r => (r.baseTeam === t || r.baseTeam.includes(t.replace('TEAM ', ''))) && r.category !== 'ACTIVE').length;
+      const rate = teamTotal > 0 ? Math.round((teamAttrition / teamTotal) * 100) : 0;
+      attritionRow.push(`${rate}%`);
+    });
+    
+    const grandTotalFromRegister = filteredRecords.filter(r => ['ACTIVE', 'AWOL', 'RESIGNED'].includes(r.category)).length;
+    const grandTotalAttrition = filteredRecords.filter(r => r.category !== 'ACTIVE').length;
+    const grandTotalRate = grandTotalFromRegister > 0 ? Math.round((grandTotalAttrition / grandTotalFromRegister) * 100) : 0;
+    attritionRow.push(`${grandTotalRate}%`);
+    summaryRows.push(attritionRow);
+
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    
+    // Set column widths for Summary
+    wsSummary['!cols'] = [
+      { wch: 30 }, // Category
+      ...teams.map(() => ({ wch: 15 })), // Teams
+      { wch: 15 } // Grand Total
+    ];
+
+    XLSX.utils.book_append_sheet(wb, wsSummary, "Summary Report");
+
+    // --- 2. Detailed Data Sheet ---
     const exportData = report.records.map(r => ({
-      'EMPLOYEE CODE': r.empCode,
-      'EMPLOYEE NAME': r.employeeName,
-      'START DATE': r.startDate,
-      'TEAM': r.team,
-      'STATUS': r.status,
-      'TERMINATION DATE': r.endDate,
+      'Branch': r.branch,
+      'Team': r.team,
+      'Employee Code': r.empCode,
+      'Employee Name': r.employeeName,
+      'Start Date': r.startDate,
+      'Status': r.status,
+      'Category': r.category,
+      'Termination Date': r.endDate,
       ...r.attendance
     }));
-    const totals: any = { 'EMPLOYEE CODE': 'TOTAL' };
-    report.attendanceColumns.forEach(col => {
-      totals[col] = report.records.reduce((sum, r) => sum + (Number(r.attendance[col]) || 0), 0);
-    });
-    exportData.push(totals);
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Attrition Report");
-    XLSX.writeFile(wb, `Attrition_Report_${selectedPeriod}.xlsx`);
+    
+    const wsDetails = XLSX.utils.json_to_sheet(exportData);
+    
+    // Set column widths for Details
+    wsDetails['!cols'] = [
+      { wch: 10 }, { wch: 20 }, { wch: 15 }, { wch: 25 }, { wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 15 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, wsDetails, "Detailed Data");
+
+    XLSX.writeFile(wb, `Attrition_Report_${selectedPeriod}_${activeBranch}.xlsx`);
   };
 
   return (
