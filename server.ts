@@ -189,23 +189,28 @@ async function createServer() {
 
   app.post("/api/reports", async (req, res) => {
     try {
-      const { fileName, period, data, author } = req.body;
+      const { fileName, period, data } = req.body;
+      
+      const insertData: any = {
+        fileName,
+        period,
+        data: data,
+      };
+
       const { data: newReport, error } = await supabase
         .from('reports')
-        .insert({
-          fileName,
-          period,
-          data: data, // Supabase handles JSON objects directly if column type is jsonb
-          author: author || "System Admin"
-        })
+        .insert(insertData)
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error("Supabase Insert Error:", error);
+        throw error;
+      }
       res.json({ id: newReport.id });
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to save report" });
+    } catch (err: any) {
+      console.error("API Error /api/reports:", err);
+      res.status(500).json({ error: "Failed to save report", message: err.message });
     }
   });
 
@@ -318,14 +323,17 @@ async function createServer() {
   return app;
 }
 
-// For local development and AI Studio
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-  createServer().then(app => {
-    const PORT = 3000;
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
+// Start server
+const startServer = async () => {
+  const app = await createServer();
+  const PORT = process.env.PORT || 3000;
+  app.listen(Number(PORT), "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
   });
+};
+
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  startServer();
 }
 
 // Export for Vercel
