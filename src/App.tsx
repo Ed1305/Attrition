@@ -35,7 +35,7 @@ import { cn } from './lib/utils';
 import { supabase as supabaseClient } from './supabase';
 import { EmployeeRecord, ProcessedReport, ReportSummary, SavedReport } from './types';
 
-type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support' | 'settings';
+type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -61,7 +61,6 @@ export default function App() {
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [currentReportId, setCurrentReportId] = useState<number | null>(null);
-  const [missingReport, setMissingReport] = useState<{ hasReport: boolean, period: string } | null>(null);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -82,7 +81,6 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       await fetchHistory();
-      await checkMonthlyStatus();
       await checkSupabaseStatus();
       
       // Automatically load the latest report for the dashboard
@@ -113,7 +111,6 @@ export default function App() {
         (payload) => {
           console.log('Real-time change received:', payload);
           fetchHistory();
-          checkMonthlyStatus();
           showToast("Cloud data updated", "success");
         }
       )
@@ -143,7 +140,6 @@ export default function App() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await fetchHistory();
-    await checkMonthlyStatus();
     await checkSupabaseStatus();
     setIsRefreshing(false);
     showToast("Data refreshed from cloud");
@@ -169,22 +165,10 @@ export default function App() {
   const logout = () => {
     setIsAdmin(false);
     localStorage.removeItem('isAdmin');
-    if (['upload', 'settings'].includes(activeTab)) {
+    if (['upload'].includes(activeTab)) {
       setActiveTab('dashboard');
     }
     showToast("Logged out");
-  };
-
-  const checkMonthlyStatus = async () => {
-    try {
-      const res = await fetch('/api/status/current-month');
-      if (res.ok) {
-        const data = await res.json();
-        setMissingReport(data);
-      }
-    } catch (err) {
-      console.error("Failed to check monthly status", err);
-    }
   };
 
   const fetchHistory = async () => {
@@ -236,7 +220,6 @@ export default function App() {
           const res = await fetch(`/api/reports/${id}`, { method: 'DELETE' });
           if (res.ok) {
             fetchHistory();
-            checkMonthlyStatus();
             if (currentReportId === id) {
               setReport(null);
               setCurrentReportId(null);
@@ -260,7 +243,6 @@ export default function App() {
           const res = await fetch('/api/reports-purge/all', { method: 'DELETE' });
           if (res.ok) {
             fetchHistory();
-            checkMonthlyStatus();
             setReport(null);
             setCurrentReportId(null);
           }
@@ -286,8 +268,9 @@ export default function App() {
       });
       if (res.ok) {
         fetchHistory();
-        checkMonthlyStatus();
-        showToast("Report saved successfully!");
+        showToast("File successfully uploaded!");
+        setReport(null);
+        setCurrentReportId(null);
       } else {
         showToast("Failed to save report", "error");
       }
@@ -299,10 +282,50 @@ export default function App() {
     }
   };
 
+  const extractPeriodFromFilename = (filename: string): string => {
+    const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+    const shortMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    
+    let monthIndex = -1;
+    const lowerFilename = filename.toLowerCase();
+    
+    // Check for full month names first
+    for (let i = 0; i < months.length; i++) {
+      if (lowerFilename.includes(months[i])) {
+        monthIndex = i;
+        break;
+      }
+    }
+    
+    // Check for short month names if full not found
+    if (monthIndex === -1) {
+      for (let i = 0; i < shortMonths.length; i++) {
+        // use regex to match word boundaries for short months to avoid false positives like "march" matching "mar"
+        const regex = new RegExp(`\\b${shortMonths[i]}\\b`, 'i');
+        if (regex.test(lowerFilename)) {
+          monthIndex = i;
+          break;
+        }
+      }
+    }
+
+    const yearMatch = filename.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : new Date().getFullYear().toString();
+
+    if (monthIndex !== -1) {
+      return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+    }
+
+    // Fallback to current year and month if no month found
+    const d = new Date();
+    return `${year}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
   const processExcel = async (file: File) => {
     setIsProcessing(true);
     setError(null);
     try {
+      setSelectedPeriod(extractPeriodFromFilename(file.name));
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       setCurrentReportId(null); // New upload, not from history
@@ -705,9 +728,13 @@ export default function App() {
           {isAdmin && (
             <NavItem 
               icon={<Upload size={18} />} 
-              label="Upload & Report" 
+              label="Upload" 
               active={activeTab === 'upload'} 
-              onClick={() => setActiveTab('upload')} 
+              onClick={() => {
+                setActiveTab('upload');
+                setReport(null);
+                setCurrentReportId(null);
+              }} 
               collapsed={!isSidebarOpen}
             />
           )}
@@ -732,15 +759,6 @@ export default function App() {
             onClick={() => setActiveTab('support')} 
             collapsed={!isSidebarOpen}
           />
-          {isAdmin && (
-            <NavItem 
-              icon={<Settings size={18} />} 
-              label="Settings" 
-              active={activeTab === 'settings'} 
-              onClick={() => setActiveTab('settings')} 
-              collapsed={!isSidebarOpen}
-            />
-          )}
         </nav>
 
         <div className="p-4 border-t border-white/5 space-y-2">
@@ -772,33 +790,6 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto p-6 md:p-12">
         <div className="max-w-6xl mx-auto space-y-8">
-          {missingReport && !missingReport.hasReport && activeTab === 'upload' && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }} 
-              animate={{ opacity: 1, scale: 1 }}
-              className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex items-center justify-between gap-4 shadow-sm"
-            >
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 rounded-lg text-amber-700">
-                  <AlertCircle size={20} />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-amber-900">Missing Monthly Data</h4>
-                  <p className="text-xs text-amber-700">You haven't uploaded the attrition data for {new Date(missingReport.period + '-01').toLocaleString('en-GB', { month: 'long', year: 'numeric' })} yet.</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setSelectedPeriod(missingReport.period);
-                  document.getElementById('file-upload')?.click();
-                }}
-                className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-600/20"
-              >
-                Upload Now
-              </button>
-            </motion.div>
-          )}
-
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <DashboardView 
@@ -846,20 +837,20 @@ export default function App() {
                       <div className="flex gap-3">
                         <button
                           onClick={saveReport}
-                        disabled={isSaving}
-                        className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
-                      >
-                        <Save size={14} />
-                        {isSaving ? "Saving..." : "Save to History"}
-                      </button>
-                      <button
-                        onClick={() => setShowSummary(!showSummary)}
-                        className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full hover:bg-black/80 transition-all text-xs font-bold shadow-lg shadow-black/10"
-                      >
-                        <FileText size={14} />
-                        {showSummary ? "Show Data Table" : "Process"}
-                      </button>
-                      <button
+                          disabled={isSaving}
+                          className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
+                        >
+                          <Save size={14} />
+                          {isSaving ? "Saving..." : "Save to Cloud"}
+                        </button>
+                        <button
+                          onClick={() => setShowSummary(!showSummary)}
+                          className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full hover:bg-black/80 transition-all text-xs font-bold shadow-lg shadow-black/10"
+                        >
+                          <FileText size={14} />
+                          {showSummary ? "Show Data Table" : "Process"}
+                        </button>
+                        <button
                         onClick={downloadReport}
                         className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
                       >
@@ -873,21 +864,6 @@ export default function App() {
 
                 {!report ? (
                   <div className="space-y-6">
-                    <div className="bg-white p-6 rounded-2xl border border-black/5 shadow-sm flex items-center gap-4">
-                      <div className="p-3 bg-black/5 rounded-xl text-black">
-                        <Calendar size={20} />
-                      </div>
-                      <div className="flex-1">
-                        <label className="text-[10px] uppercase tracking-widest font-bold text-black/40 block mb-1">Select Report Period</label>
-                        <input 
-                          type="month" 
-                          value={selectedPeriod}
-                          onChange={(e) => setSelectedPeriod(e.target.value)}
-                          className="bg-transparent border-none p-0 text-sm font-bold focus:ring-0 w-full"
-                        />
-                      </div>
-                    </div>
-
                     <div
                       className={cn(
                         "relative group border-2 border-dashed rounded-3xl p-16 transition-all duration-300 flex flex-col items-center justify-center text-center cursor-pointer bg-white",
@@ -999,7 +975,6 @@ export default function App() {
 
             {activeTab === 'documentation' && <DocumentationView />}
             {activeTab === 'support' && <SupportView />}
-            {activeTab === 'settings' && <SettingsView />}
           </AnimatePresence>
         </div>
       </main>
