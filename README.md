@@ -4,7 +4,7 @@ Uploads a monthly staff register (`.xlsx`) for the **INVNT Cape Town** and **ALP
 
 - **Frontend:** React 19 + Vite 6 + Tailwind 4 (`src/`)
 - **Backend:** Express 4 (`server/app.ts`) — also deployable as a Vercel function (`api/index.ts`)
-- **Database:** Neon Postgres via `pg` (`server/db.ts`, `server/repo.ts`, `db/schema.sql`)
+- **Database:** Neon Postgres via `pg` (`server/db.ts`, `server/repo.ts`, `server/schema.ts`)
 
 > Migrating from the old Supabase build? See **[MIGRATION.md](./MIGRATION.md)** — it walks through exporting the old reports and loading them into Neon.
 > Code review of the pre-migration app: **[ANALYSIS.md](./ANALYSIS.md)**.
@@ -59,7 +59,7 @@ The app uses a small pool (`PGPOOL_MAX`, default 3) per serverless instance, whi
 | `npm start` | production server (serves `dist/` + API) |
 | `npm test` | repository tests against a real Postgres engine (PGlite/WASM) |
 | `npm run lint` | `tsc --noEmit` over `src`, `server`, `api`, `scripts`, `tests` |
-| `npm run db:setup` | apply `db/schema.sql` |
+| `npm run db:setup` | apply the schema from `server/schema.ts` (the deployed API also applies it automatically on first use) |
 | `npm run db:demo` | schema + three months of demo data |
 | `npm run db:migrate` | import old Supabase reports (`--from-supabase`, `--from-postgres` or `--file`) |
 | `npm run dev:db` | local Postgres (PGlite over the wire protocol) on `:55432` |

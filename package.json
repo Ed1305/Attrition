@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test tests/parseRegister.test.ts tests/repo.test.ts tests/migrate.test.ts tests/upload-flow.test.ts",
+    "test": "node --import tsx --test tests/parseRegister.test.ts tests/repo.test.ts tests/migrate.test.ts tests/upload-flow.test.ts tests/vercel-routing.test.ts",
     "pretest": "node scripts/preflight.mjs",
     "db:setup": "tsx scripts/setup-db.ts",
     "predb:setup": "node scripts/preflight.mjs",

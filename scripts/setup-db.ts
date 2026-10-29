@@ -1,11 +1,8 @@
 import 'dotenv/config';
-import { readFile } from 'node:fs/promises';
 import { closePool, DatabaseNotConfiguredError, getDb, type Db } from '../server/db';
+import { SCHEMA_SQL } from '../server/schema.ts';
 
-const schemaUrl = new URL('../db/schema.sql', import.meta.url);
-
-const schema = await readFile(schemaUrl, 'utf8');
-console.log('Applying db/schema.sql to', process.env.DATABASE_URL?.replace(/\/\/[^@]*@/, '//***@') ?? '(no DATABASE_URL)');
+console.log('Applying the Attrition schema to', process.env.DATABASE_URL?.replace(/\/\/[^@]*@/, '//***@') ?? '(no DATABASE_URL)');
 
 function connect(): Db {
   try {
@@ -23,7 +20,7 @@ function connect(): Db {
 }
 
 const db = connect();
-await db.exec(schema);
+await db.exec(SCHEMA_SQL);
 
 const tables = await db.query<{ table_name: string }>(
   `select table_name from information_schema.tables

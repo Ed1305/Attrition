@@ -8,6 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 import * as XLSX from 'xlsx';
 import type { Db } from '../server/db.ts';
 import { getReport, getTrends, listReports, saveReport } from '../server/repo.ts';
+import { SCHEMA_SQL } from '../server/schema.ts';
 import { extractPeriodFromFilename, parseRegister, type SheetInput } from '../src/lib/parseRegister.ts';
 
 /**
@@ -49,7 +50,7 @@ before(async () => {
   // 2. Fresh Postgres with the production schema.
   pglite = new PGlite();
   await pglite.waitReady;
-  await pglite.exec(await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8'));
+  await pglite.exec(SCHEMA_SQL);
   db = pgliteDb(pglite);
 });
 
