@@ -3,7 +3,7 @@
 Uploads a monthly staff register (`.xlsx`) for the **INVNT Cape Town** and **ALPHA** floors, computes the per-team headcount / attrition tables, stores every report in **Neon Postgres**, and exports a summary workbook.
 
 - **Frontend:** React 19 + Vite 6 + Tailwind 4 (`src/`)
-- **Backend:** Express 4 (`server/app.ts`) — also deployable as a Vercel function (`api/index.ts`)
+- **Backend:** Express 4 (`server/app.ts`) — also deployable as a Vercel function (`server/handler.ts`, bundled into `api/index.js` by `npm run build:api`)
 - **Database:** Neon Postgres via `pg` (`server/db.ts`, `server/repo.ts`, `server/schema.ts`)
 
 > Migrating from the old Supabase build? See **[MIGRATION.md](./MIGRATION.md)** — it walks through exporting the old reports and loading them into Neon.
@@ -55,7 +55,8 @@ The app uses a small pool (`PGPOOL_MAX`, default 3) per serverless instance, whi
 | Command | What it does |
 |---|---|
 | `npm run dev` | dev server with Vite middleware |
-| `npm run build` | production client build into `dist/` |
+| `npm run build` | API bundle (`api/index.js`) + production client build into `dist/` |
+| `npm run build:api` | regenerate the self-contained Vercel function bundle only |
 | `npm start` | production server (serves `dist/` + API) |
 | `npm test` | repository tests against a real Postgres engine (PGlite/WASM) |
 | `npm run lint` | `tsc --noEmit` over `src`, `server`, `api`, `scripts`, `tests` |
