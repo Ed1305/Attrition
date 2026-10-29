@@ -9,8 +9,8 @@ import {
   requireAdmin,
   resetLoginAttempts,
   sessionCookie,
-} from './auth';
-import { DatabaseNotConfiguredError, getDb, pingDatabase } from './db';
+} from './auth.ts';
+import { DatabaseNotConfiguredError, getDb, pingDatabase } from './db.ts';
 import {
   deleteReport,
   getReport,
@@ -20,7 +20,7 @@ import {
   purgeReports,
   saveReport,
   ValidationError,
-} from './repo';
+} from './repo.ts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

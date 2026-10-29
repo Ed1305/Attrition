@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Db } from './db.js';
-import type { EmployeeRecord, ProcessedReport } from '../src/types';
+import type { Db } from './db.ts';
+import type { EmployeeRecord, ProcessedReport } from '../src/types.ts';
 
 export interface ReportSummary {
   id: string;

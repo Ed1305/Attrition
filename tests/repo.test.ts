@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
+import { SCHEMA_SQL } from '../server/schema.ts';
 import type { Db } from '../server/db.ts';
 import {
   deleteReport,
@@ -59,8 +59,10 @@ function record(overrides: Partial<EmployeeRecord> = {}): EmployeeRecord {
 before(async () => {
   pglite = new PGlite();
   await pglite.waitReady;
-  const schema = await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8');
-  await pglite.exec(schema);
+  // Applied twice on purpose: the API re-applies this DDL on the first query of
+  // every cold start, so it has to stay idempotent.
+  await pglite.exec(SCHEMA_SQL);
+  await pglite.exec(SCHEMA_SQL);
   db = pgliteDb(pglite);
 });
 

@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { SCHEMA_SQL } from './schema.ts';
 
 /**
  * Minimal database interface so the repository layer can run against
@@ -29,6 +30,9 @@ class PgDb implements Db {
   ) {}
 
   async query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+    // Root instance only: make sure the schema exists before the first query
+    // runs, so a fresh Neon database works without a manual setup step.
+    if (this.owner) await ensureSchema();
     const result = await this.executor.query(sql, params);
     return result.rows as T[];
   }
@@ -85,6 +89,30 @@ export function getPool(): pg.Pool {
 
 export function getDb(): Db {
   return new PgDb(getPool(), getPool());
+}
+
+let schemaReady: Promise<void> | null = null;
+
+/**
+ * Applies the (idempotent) schema once per process.
+ *
+ * Serverless deployments have no build step that can reach the database, so a
+ * brand new Neon project would otherwise answer every request with
+ * `relation "reports" does not exist`. Failures are logged rather than thrown:
+ * if the role cannot run DDL but the schema already exists, queries must still
+ * work. Errors reset the memo so the next request retries.
+ */
+export function ensureSchema(): Promise<void> {
+  if (!schemaReady) {
+    schemaReady = getPool()
+      .query(SCHEMA_SQL)
+      .then(() => undefined)
+      .catch((err: unknown) => {
+        schemaReady = null;
+        console.error('[db] schema ensure failed:', err instanceof Error ? err.message : err);
+      });
+  }
+  return schemaReady;
 }
 
 /** Cheap liveness probe used by /api/health. */

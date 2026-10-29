@@ -32,11 +32,11 @@ ADMIN_PASSCODE=choose-something-long
 
 ```bash
 npm run db:setup
-# Applying db/schema.sql …
+# Applying the schema …
 # Ready: attendance, employees, period_trend, report_overview, reports
 ```
 
-`db/schema.sql` is idempotent (`create table if not exists`, `create or replace view`), so it
+The schema (`server/schema.ts`) is idempotent (`create table if not exists`, `create or replace view`), so it
 is safe to re-run.
 
 ---

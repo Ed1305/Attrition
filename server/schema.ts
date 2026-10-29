@@ -1,4 +1,14 @@
--- ============================================================================
+/**
+ * Attrition schema (Neon / Postgres).
+ *
+ * Kept as a TypeScript module (rather than a .sql file read at runtime) so the
+ * DDL ships inside the serverless function bundle: the deployed API applies it
+ * lazily on the first query, which means a brand new Neon database works
+ * without anyone running `npm run db:setup` by hand.
+ *
+ * Every statement is idempotent, so applying it repeatedly is safe.
+ */
+export const SCHEMA_SQL = `-- ============================================================================
 --  Attrition — Neon (Postgres) schema
 --  Run with:  npm run db:setup
 --  Idempotent: safe to re-run.
@@ -93,3 +103,4 @@ from reports r
 left join employees e on e.report_id = r.id
 group by r.period
 order by r.period;
+`;
