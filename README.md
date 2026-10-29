@@ -63,6 +63,7 @@ The app uses a small pool (`PGPOOL_MAX`, default 3) per serverless instance, whi
 | `npm run db:demo` | schema + three months of demo data |
 | `npm run db:migrate` | import old Supabase reports (`--from-supabase`, `--from-postgres` or `--file`) |
 | `npm run dev:db` | local Postgres (PGlite over the wire protocol) on `:55432` |
+| `npm run sample:register` | writes a realistic sample register to `samples/register-august-2026.xlsx` |
 
 Local development **without** a Neon account:
 
@@ -72,6 +73,48 @@ npm run dev:db                                     # terminal 1
 export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/postgres
 npm run db:demo && npm run dev
 ```
+
+---
+
+## 3a. Uploading a register
+
+Sign in with the admin passcode, open **Upload**, and drop the monthly `.xlsx` in.
+
+What the parser expects (both sheets are optional, but at least one must exist):
+
+| Sheet name | Notes |
+|---|---|
+| `INVNT CAPE TOWN` | processed as branch *INVNT CAPE TOWN* |
+| `ALPHA` | processed as branch *ALPHA* |
+
+Within each sheet:
+
+* a header row containing an employee-code column — `EMP CODE`, `EMPLOYEE CODE`,
+  `EMP NO`, `EMPLOYEE NO`, `STAFF NO` (all accepted, and the two sheets may differ);
+* a name column (`EMPLOYEE NAME`, `AGENT NAME`, `FULL NAME` or `NAME`), plus optional
+  `START DATE`, `TEAM`, `MANAGER` and `TERMINATION DATE` columns;
+* a **row directly under the header** holding day numbers `26, 27, … 31, 1, … 25`
+  (that defines the attendance window — 31 columns);
+* section headings such as `TEAM MOSES`, `TEAM PROSPER`, `INVNT INCUBATION`,
+  `RESIGNED EMPLOYEES`, `AWOL EMPLOYEES`, `DROPPED OUT TRAINING/INCUBATION`,
+  `TERMINATED`, on their own row with no employee code.
+
+Attendance cells accept `1` / `P` for present, `0` for absent, and any other code
+(`A`, `L`, `SICK`) is stored and shown as-is.
+
+**The reporting period is read from the file name** (`… August 2026.xlsx` → `2026-08`).
+If the name has no month it falls back to the current month, so check the **Period**
+box next to the branch switcher before saving — it is editable until the report is saved.
+
+Try the whole flow with a generated sample:
+
+```bash
+npm run sample:register          # writes samples/register-august-2026.xlsx
+```
+
+If something in the sheet does not look right, the app reports it instead of guessing
+silently: missing attendance window, agents that could not be assigned to a team, a sheet
+with no recognisable header, or no employee rows at all.
 
 ---
 
@@ -167,5 +210,5 @@ Apply the schema once against Neon (`npm run db:setup` from your machine or CI) 
 Tracked in [ANALYSIS.md](./ANALYSIS.md); the ones that still matter after the database migration:
 
 * The report's "attrition rate" is still a *stock* ratio (inactive ÷ register) and its numerator/denominator are inconsistent, so it can exceed 100%. Fix is scoped in ANALYSIS.md §5/P0-3 but not implemented here.
-* The Excel parser still infers teams/statuses with substring heuristics and guesses the period from the filename.
+* The Excel parser still infers teams/statuses with substring heuristics (now covered by tests, and it reports what it could not recognise) and derives the period from the filename.
 * `xlsx@0.18.5` has two unpatched advisories (prototype pollution, ReDoS) — consider SheetJS ≥ 0.20.2 from `cdn.sheetjs.com`.
