@@ -61,7 +61,7 @@ The app uses a small pool (`PGPOOL_MAX`, default 3) per serverless instance, whi
 | `npm run lint` | `tsc --noEmit` over `src`, `server`, `api`, `scripts`, `tests` |
 | `npm run db:setup` | apply `db/schema.sql` |
 | `npm run db:demo` | schema + three months of demo data |
-| `npm run db:migrate` | import old Supabase reports (`--from-supabase` or `--file`) |
+| `npm run db:migrate` | import old Supabase reports (`--from-supabase`, `--from-postgres` or `--file`) |
 | `npm run dev:db` | local Postgres (PGlite over the wire protocol) on `:55432` |
 
 Local development **without** a Neon account:
