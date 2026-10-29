@@ -11,7 +11,7 @@
  */
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
-import { closePool, getDb } from '../server/db';
+import { closePool, DatabaseNotConfiguredError, getDb } from '../server/db';
 import { saveReport, ValidationError } from '../server/repo';
 import type { EmployeeRecord } from '../src/types';
 
@@ -121,7 +121,20 @@ if (file) {
 
 console.log(`Found ${sourceRows.length} report(s) to migrate.`);
 
-const db = dryRun ? null : getDb();
+let db = null;
+if (!dryRun) {
+  try {
+    db = getDb();
+  } catch (err) {
+    if (err instanceof DatabaseNotConfiguredError) {
+      console.error('\n  DATABASE_URL is not set — nothing to import into.\n');
+      console.error('  Add the Neon pooled connection string to .env.local (see README section 1),');
+      console.error('  or re-run with --dry-run to validate the export without a database.\n');
+      process.exit(1);
+    }
+    throw err;
+  }
+}
 let ok = 0;
 const failures: Array<{ row: number; error: string }> = [];
 
