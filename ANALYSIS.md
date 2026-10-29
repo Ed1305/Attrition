@@ -386,7 +386,26 @@ No application source files were modified for this analysis; the temporary build
 
 ---
 
-## 12. Bottom line
+## 12. Migration status (added after this review)
+
+The Supabase → **Neon Postgres** migration landed after this analysis was written. Findings resolved
+by that change:
+
+| Finding | Status |
+|---|---|
+| §S-1 client-side "admin" / passcode in the bundle | **Fixed** — passcode lives only in `ADMIN_PASSCODE`; the browser holds an HttpOnly signed cookie |
+| §S-2 unauthenticated writes, public purge endpoint | **Fixed** — every mutating route requires an admin session; login is rate-limited |
+| §S-3 anon Supabase key + realtime PII channel in the browser | **Fixed** — no database credentials reach the client; the realtime channel is replaced by polling |
+| §O-1 install blocked by `better-sqlite3` | **Fixed** — dependency removed (with `@google/genai`, `autoprefixer`, `@supabase/supabase-js`) |
+| §O-4 1 MB single-chunk bundle | **Improved** — SheetJS is lazy-loaded and split; initial payload ≈ 137 kB gzip (was 314 kB) |
+| §O-7 no tests | **Improved** — `npm test` runs the repository against a real Postgres engine (PGlite) |
+| §6 duplicate months / numeric ids | **Fixed** — `unique (period)` with transactional replace, `uuid` ids |
+| §S-5 50 MB body cap, silent 500s | **Fixed** — 12 MB limit, `400/401/404/413/503` mapped explicitly |
+
+Still open (unchanged by the migration): **the attrition formula (§5 C-1 to C-6)**, the parser
+heuristics (§4), the `xlsx` advisories (§S-4), and the accessibility/UX items in §9.
+
+## 13. Bottom line
 
 The hard part of this product is not the UI — it is *deciding what "attrition" means for this floor and making the spreadsheet-to-KPI path provable*. Right now the app makes that decision implicitly (in four slightly different places) and guesses the structure of the input, while the only thing standing between a stranger and the entire history is a string comparison in the browser.
 

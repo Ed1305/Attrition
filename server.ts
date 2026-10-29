@@ -1,152 +1,54 @@
-import "dotenv/config";
-import express from "express";
-import { createServer as createViteServer } from "vite";
-import { createClient } from "@supabase/supabase-js";
-import path from "path";
-import { fileURLToPath } from "url";
+import 'dotenv/config';
+import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createApp } from './server/app';
+import { closePool } from './server/db';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isProduction = process.env.NODE_ENV === 'production';
 
-// Supabase Client Initialization
-const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
-const supabase = createClient(supabaseUrl, supabaseKey);
+async function main() {
+  const app = createApp();
 
-async function createServer() {
-  const app = express();
-  const PORT = 3000;
-
-  app.use(express.json({ limit: '50mb' }));
-
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", supabaseConfigured: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) });
-  });
-
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.warn("Supabase not configured. Database features will not work.");
+  if (!process.env.DATABASE_URL) {
+    console.warn(
+      '[startup] DATABASE_URL is not set — the API will answer 503 for all data routes.\n' +
+        '          Copy .env.example to .env.local and paste your Neon connection string.',
+    );
+  }
+  if (!process.env.ADMIN_PASSCODE) {
+    console.warn('[startup] ADMIN_PASSCODE is not set — uploading/saving/deleting is disabled.');
   }
 
-  // API Routes
-  app.get("/api/reports", async (req, res) => {
-    try {
-      const { data: reports, error } = await supabase
-
-        .from('reports')
-        .select('id, fileName, period, createdAt')
-        .order('createdAt', { ascending: false });
-      
-      if (error) throw error;
-      res.json(reports);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch reports" });
-    }
-  });
-
-  app.get("/api/reports/:id", async (req, res) => {
-    try {
-      const { data: report, error } = await supabase
-        .from('reports')
-        .select('*')
-        .eq('id', req.params.id)
-        .single();
-
-      if (error || !report) return res.status(404).json({ error: "Report not found" });
-      
-      res.json({
-        ...report,
-        data: typeof report.data === 'string' ? JSON.parse(report.data) : report.data
-      });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch report" });
-    }
-  });
-
-  app.post("/api/reports", async (req, res) => {
-    try {
-      const { fileName, period, data } = req.body;
-      
-      const insertData: any = {
-        fileName,
-        period,
-        data: data,
-      };
-
-      const { data: newReport, error } = await supabase
-        .from('reports')
-        .insert(insertData)
-        .select()
-        .single();
-
-      if (error) {
-        console.error("Supabase Insert Error:", error);
-        throw error;
-      }
-      res.json({ id: newReport.id });
-    } catch (err: any) {
-      console.error("API Error /api/reports:", err);
-      res.status(500).json({ error: "Failed to save report", message: err.message });
-    }
-  });
-
-  app.delete("/api/reports/:id", async (req, res) => {
-    try {
-      const { error } = await supabase
-        .from('reports')
-        .delete()
-        .eq('id', req.params.id);
-      
-      if (error) throw error;
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to delete report" });
-    }
-  });
-
-  app.delete("/api/reports-purge/all", async (req, res) => {
-    try {
-      // Note: Purge all might require a different approach in Supabase depending on RLS
-      const { error } = await supabase
-        .from('reports')
-        .delete()
-        .neq('id', 0); // Delete all where id != 0
-      
-      if (error) throw error;
-      res.json({ success: true, message: "All reports purged successfully" });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to purge reports" });
-    }
-  });
-
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+  if (!isProduction) {
+    // vite is a devDependency: load it lazily so a production bundle never
+    // touches it (the previous build imported vite at module scope).
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
-    });
+    const dist = path.join(__dirname, 'dist');
+    app.use(express.static(dist));
+    app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
   }
 
-  return app;
-}
-
-// Start server
-const startServer = async () => {
-  const app = await createServer();
-  const PORT = process.env.PORT || 3000;
-  app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+  const port = Number(process.env.PORT ?? 3000);
+  const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`Attrition running on http://localhost:${port} (${isProduction ? 'production' : 'development'})`);
   });
-};
 
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-  startServer();
+  const shutdown = async (signal: string) => {
+    console.log(`\n${signal} received — shutting down.`);
+    server.close();
+    await closePool().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-// Export for Vercel
-export default createServer;
+main().catch((err) => {
+  console.error('[startup] fatal:', err);
+  process.exit(1);
+});

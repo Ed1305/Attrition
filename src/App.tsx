@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
-import * as XLSX from 'xlsx';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { 
   Upload, 
   FileSpreadsheet, 
@@ -28,24 +27,34 @@ import {
   ShieldCheck,
   RefreshCw,
   BarChart3,
-  Users
+  Users,
+  TrendingUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
-import { supabase as supabaseClient } from './supabase';
-import { EmployeeRecord, ProcessedReport, ReportSummary, SavedReport } from './types';
+import {
+  ApiError,
+  adminLogin,
+  adminLogout,
+  adminSession,
+  deleteReport as deleteReportApi,
+  getReport as getReportApi,
+  health,
+  listReports as listReportsApi,
+  listTrends as listTrendsApi,
+  purgeReports as purgeReportsApi,
+  saveReport as saveReportApi,
+} from './lib/api';
+import { EmployeeRecord, ProcessedReport, ReportSummary, TrendPoint } from './types';
 
 type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [report, setReport] = useState<ProcessedReport | null>(null);
-  const [isAdmin, setIsAdmin] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('isAdmin') === 'true';
-    }
-    return false;
-  });
+  // Authorisation is server-side now: the cookie is HttpOnly, so the client
+  // can only ask the server whether it is authenticated.
+  const [isAdmin, setIsAdmin] = useState(false);
   const [passcode, setPasscode] = useState('');
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
@@ -60,7 +69,7 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [currentReportId, setCurrentReportId] = useState<number | null>(null);
+  const [currentReportId, setCurrentReportId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -76,73 +85,64 @@ export default function App() {
   });
 
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [supabaseStatus, setSupabaseStatus] = useState<boolean | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<boolean | null>(null);
+  const [trends, setTrends] = useState<TrendPoint[]>([]);
+  const historySignature = useRef<string>('');
 
   useEffect(() => {
+    let cancelled = false;
+
     const init = async () => {
+      const [session, healthInfo] = await Promise.all([
+        adminSession().catch(() => null),
+        health(),
+      ]);
+      if (cancelled) return;
+
+      setIsAdmin(Boolean(session?.authenticated));
+      setCloudStatus(Boolean(healthInfo?.database.connected));
+
       await fetchHistory();
-      await checkSupabaseStatus();
-      
-      // Automatically load the latest report for the dashboard
-      try {
-        const res = await fetch('/api/reports');
-        if (res.ok) {
-          const historyData = await res.json();
-          if (historyData.length > 0) {
-            loadReportFromHistory(historyData[0].id);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to auto-load latest report", err);
+      await fetchTrends();
+
+      const latest = await listReportsApi().catch(() => []);
+      if (!cancelled && latest.length > 0) {
+        loadReportFromHistory(latest[0].id);
       }
     };
     init();
 
-    // Set up real-time listener for reports
-    const channel = supabaseClient
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'reports'
-        },
-        (payload) => {
-          console.log('Real-time change received:', payload);
-          fetchHistory();
-          showToast("Cloud data updated", "success");
-        }
-      )
-      .subscribe();
+    // Neon has no realtime channel: poll the report list while the tab is
+    // visible and refresh as soon as it regains focus.
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') fetchHistory({ notify: true });
+    };
+    const interval = window.setInterval(refreshIfVisible, 60_000);
+    document.addEventListener('visibilitychange', refreshIfVisible);
 
     return () => {
-      supabaseClient.removeChannel(channel);
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
     };
   }, []);
 
-  const checkSupabaseStatus = async () => {
-    try {
-      const res = await fetch('/api/health');
-      const backendConfigured = res.ok ? (await res.json()).supabaseConfigured : false;
-      const frontendConfigured = !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
-      
-      setSupabaseStatus(backendConfigured && frontendConfigured);
-      
-      if (backendConfigured && !frontendConfigured) {
-        console.warn("Supabase backend is configured, but frontend keys are missing. Real-time updates will not work.");
-      }
-    } catch (err) {
-      setSupabaseStatus(false);
+  const checkCloudStatus = async () => {
+    const info = await health();
+    const connected = Boolean(info?.database.connected);
+    setCloudStatus(connected);
+    if (info && !connected) {
+      console.warn('Neon database is not reachable:', info.database.error);
     }
   };
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await fetchHistory();
-    await checkSupabaseStatus();
+    await fetchHistory({ notify: true });
+    await fetchTrends();
+    await checkCloudStatus();
     setIsRefreshing(false);
-    showToast("Data refreshed from cloud");
+    showToast("Data refreshed from the database");
   };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -150,65 +150,89 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleLogin = () => {
-    if (passcode === 'ak_2026!') {
+  const handleLogin = async () => {
+    try {
+      await adminLogin(passcode);
       setIsAdmin(true);
-      localStorage.setItem('isAdmin', 'true');
       setShowLoginModal(false);
       setPasscode('');
       showToast("Admin access granted");
-    } else {
-      alert('Incorrect passcode');
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : 'Incorrect passcode', 'error');
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await adminLogout().catch(() => undefined);
     setIsAdmin(false);
-    localStorage.removeItem('isAdmin');
     if (['upload'].includes(activeTab)) {
       setActiveTab('dashboard');
     }
     showToast("Logged out");
   };
 
-  const fetchHistory = async () => {
-    try {
-      const res = await fetch('/api/reports');
-      if (res.ok) {
-        const data = await res.json();
-        setHistory(data);
+  /** Session expiry mid-session is recoverable: show the login modal again. */
+  const handleApiError = (err: unknown, fallback: string) => {
+    if (err instanceof ApiError) {
+      if (err.status === 401) {
+        setIsAdmin(false);
+        setShowLoginModal(true);
+        showToast('Admin login required', 'error');
+        return;
       }
+      showToast(err.message, 'error');
+      return;
+    }
+    console.error(fallback, err);
+    showToast(fallback, 'error');
+  };
+
+  const fetchHistory = async (options: { notify?: boolean } = {}) => {
+    try {
+      const data = await listReportsApi();
+      const nextSignature = data.map(r => `${r.id}:${r.records}`).join('|');
+      if (options.notify && historySignature.current && historySignature.current !== nextSignature) {
+        showToast("Cloud data updated", "success");
+      }
+      historySignature.current = nextSignature;
+      setHistory(data);
     } catch (err) {
       console.error("Failed to fetch history", err);
     }
   };
 
-  const loadReportFromHistory = async (id: number) => {
+  const fetchTrends = async () => {
+    try {
+      setTrends(await listTrendsApi());
+    } catch (err) {
+      console.error("Failed to fetch trends", err);
+    }
+  };
+
+  const loadReportFromHistory = async (id: string) => {
     try {
       setIsProcessing(true);
-      const res = await fetch(`/api/reports/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setReport(data.data);
-        setSelectedPeriod(data.period);
-        setCurrentReportId(id);
-        
-        const branches = Array.from(new Set(data.data.records.map((r: any) => r.branch)));
-        if (branches.length > 0) {
-          setSelectedBranch(branches[0]);
-        }
-        
-        setShowSummary(true);
-        setActiveTab('dashboard');
+      const { report: loaded, period } = await getReportApi(id);
+      setReport(loaded);
+      if (period) setSelectedPeriod(period);
+      setCurrentReportId(id);
+
+      const branches = Array.from(new Set(loaded.records.map((r: EmployeeRecord) => r.branch)));
+      if (branches.length > 0) {
+        setSelectedBranch(branches[0]);
       }
+
+      setShowSummary(true);
+      setActiveTab('dashboard');
     } catch (err) {
       setError("Failed to load report from history");
+      console.error(err);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const deleteReport = (id: number, e: React.MouseEvent) => {
+  const deleteReport = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmModal({
       isOpen: true,
@@ -217,16 +241,16 @@ export default function App() {
       isDanger: true,
       onConfirm: async () => {
         try {
-          const res = await fetch(`/api/reports/${id}`, { method: 'DELETE' });
-          if (res.ok) {
-            fetchHistory();
-            if (currentReportId === id) {
-              setReport(null);
-              setCurrentReportId(null);
-            }
+          await deleteReportApi(id);
+          await fetchHistory();
+          await fetchTrends();
+          if (currentReportId === id) {
+            setReport(null);
+            setCurrentReportId(null);
           }
+          showToast('Report deleted');
         } catch (err) {
-          console.error("Failed to delete report", err);
+          handleApiError(err, 'Failed to delete report');
         }
       }
     });
@@ -240,14 +264,14 @@ export default function App() {
       isDanger: true,
       onConfirm: async () => {
         try {
-          const res = await fetch('/api/reports-purge/all', { method: 'DELETE' });
-          if (res.ok) {
-            fetchHistory();
-            setReport(null);
-            setCurrentReportId(null);
-          }
+          const result = await purgeReportsApi();
+          await fetchHistory();
+          await fetchTrends();
+          setReport(null);
+          setCurrentReportId(null);
+          showToast(`${result.removed} report(s) removed from the database`);
         } catch (err) {
-          console.error("Failed to purge history", err);
+          handleApiError(err, 'Failed to purge history');
         }
       }
     });
@@ -257,26 +281,19 @@ export default function App() {
     if (!report) return;
     setIsSaving(true);
     try {
-      const res = await fetch('/api/reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: report.fileName,
-          period: selectedPeriod,
-          data: report
-        })
+      const result = await saveReportApi({
+        fileName: report.fileName,
+        period: selectedPeriod,
+        data: report,
       });
-      if (res.ok) {
-        fetchHistory();
-        showToast("File successfully uploaded!");
-        setReport(null);
-        setCurrentReportId(null);
-      } else {
-        showToast("Failed to save report", "error");
-      }
+      setCurrentReportId(result.id);
+      await fetchHistory();
+      await fetchTrends();
+      showToast(result.replaced
+        ? `Replaced the existing ${selectedPeriod} report`
+        : `Saved ${selectedPeriod} to the database`);
     } catch (err) {
-      console.error("Failed to save report", err);
-      showToast("Error saving report", "error");
+      handleApiError(err, 'Failed to save report');
     } finally {
       setIsSaving(false);
     }
@@ -325,6 +342,9 @@ export default function App() {
     setIsProcessing(true);
     setError(null);
     try {
+      // SheetJS is ~140 kB gzipped and only needed for upload/export, so it is
+      // loaded on demand instead of on first paint.
+      const XLSX = await import('xlsx');
       setSelectedPeriod(extractPeriodFromFilename(file.name));
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
@@ -612,9 +632,10 @@ export default function App() {
     }
   }, []);
 
-  const downloadReport = () => {
+  const downloadReport = async () => {
     if (!report) return;
 
+    const XLSX = await import('xlsx');
     const wb = XLSX.utils.book_new();
     const branches = ['ALPHA', 'INVNT CAPE TOWN'];
 
@@ -806,7 +827,8 @@ export default function App() {
                 isSaving={isSaving}
                 setReport={setReport}
                 isAdmin={isAdmin}
-                supabaseStatus={supabaseStatus}
+                cloudStatus={cloudStatus}
+                trends={trends}
                 handleRefresh={handleRefresh}
                 isRefreshing={isRefreshing}
               />
@@ -841,7 +863,7 @@ export default function App() {
                           className="flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold"
                         >
                           <Save size={14} />
-                          {isSaving ? "Saving..." : "Save to Cloud"}
+                          {isSaving ? "Saving..." : "Save to Neon"}
                         </button>
                         <button
                           onClick={() => setShowSummary(!showSummary)}
@@ -1099,12 +1121,13 @@ function DashboardView({
   isSaving,
   setReport,
   isAdmin,
-  supabaseStatus,
+  cloudStatus,
+  trends,
   handleRefresh,
   isRefreshing
 }: { 
   history: ReportSummary[], 
-  onLoadReport: (id: number) => void,
+  onLoadReport: (id: string) => void,
   report: ProcessedReport | null,
   selectedPeriod: string,
   selectedBranch: string,
@@ -1116,7 +1139,8 @@ function DashboardView({
   isSaving: boolean,
   setReport: (r: ProcessedReport | null) => void,
   isAdmin: boolean,
-  supabaseStatus: boolean | null,
+  cloudStatus: boolean | null,
+  trends: TrendPoint[],
   handleRefresh: () => void,
   isRefreshing: boolean
 }) {
@@ -1139,7 +1163,7 @@ function DashboardView({
                 <span className="bg-emerald-500 text-white text-[8px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full animate-pulse">Latest</span>
               )}
             </div>
-            <p className="text-[10px] text-black/50 mt-1 uppercase tracking-widest font-bold">Real-time Attrition Overview</p>
+            <p className="text-[10px] text-black/50 mt-1 uppercase tracking-widest font-bold">Monthly attrition overview · Neon Postgres</p>
           </div>
         </div>
         
@@ -1163,15 +1187,15 @@ function DashboardView({
               {isAdmin && (
                 <button
                   onClick={saveReport}
-                  disabled={isSaving || !supabaseStatus}
+                  disabled={isSaving || !cloudStatus}
                   className={cn(
                     "flex items-center gap-2 border border-black/10 bg-white text-black px-4 py-2 rounded-full hover:bg-black/5 transition-all text-xs font-bold",
-                    !supabaseStatus && "opacity-50 cursor-not-allowed"
+                    !cloudStatus && "opacity-50 cursor-not-allowed"
                   )}
-                  title={!supabaseStatus ? "Cloud connection required to save" : "Save to cloud history"}
+                  title={!cloudStatus ? "Database connection required to save" : "Save this report to Neon (replaces the same period)"}
                 >
                   <Save size={14} className={cn(isSaving && "animate-pulse")} />
-                  {isSaving ? "Syncing..." : "Save to Cloud"}
+                  {isSaving ? "Saving..." : "Save to Neon"}
                 </button>
               )}
               <button
@@ -1193,6 +1217,8 @@ function DashboardView({
         )}
       </header>
 
+      <TrendStrip trends={trends} />
+
       {report ? (
         <div className="space-y-6">
           {showSummary ? (
@@ -1212,7 +1238,7 @@ function DashboardView({
                     onClick={handleRefresh}
                     disabled={isRefreshing}
                     className={cn("p-1.5 bg-black/5 rounded-lg hover:bg-black/10 transition-all", isRefreshing && "animate-spin")}
-                    title="Refresh from cloud"
+                    title="Refresh from the database"
                   >
                     <RefreshCw size={14} className="text-black/40" />
                   </button>
@@ -1221,14 +1247,14 @@ function DashboardView({
                   <p className="text-[10px] text-black/50 uppercase tracking-widest font-bold">
                     {isAdmin ? "Quick access to latest data" : "The monthly attrition report is currently being prepared"}
                   </p>
-                  {supabaseStatus === true && (
+                  {cloudStatus === true && (
                     <span className="flex items-center gap-1 text-[8px] font-bold text-emerald-600 uppercase tracking-tighter bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-                      <ShieldCheck size={8} /> Cloud Sync Active
+                      <ShieldCheck size={8} /> Neon Connected
                     </span>
                   )}
-                  {supabaseStatus === false && (
+                  {cloudStatus === false && (
                     <span className="flex items-center gap-1 text-[8px] font-bold text-amber-600 uppercase tracking-tighter bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100">
-                      <AlertCircle size={8} /> Local Mode Only
+                      <AlertCircle size={8} /> Database Offline
                     </span>
                   )}
                 </div>
@@ -1282,6 +1308,47 @@ function NavItem({ icon, label, active, onClick, collapsed }: { icon: React.Reac
       {icon}
       {!collapsed && <span>{label}</span>}
     </button>
+  );
+}
+
+function TrendStrip({ trends }: { trends: TrendPoint[] }) {
+  if (trends.length < 2) return null;
+
+  const share = (point: TrendPoint) => (point.records > 0 ? Math.round((point.inactive / point.records) * 100) : 0);
+  const last = trends[trends.length - 1];
+  const previous = trends[trends.length - 2];
+  const delta = share(last) - share(previous);
+
+  return (
+    <div className="glass-card rounded-2xl px-5 py-4 flex flex-wrap items-center gap-6">
+      <div className="flex items-center gap-2 text-[#5A7D4A]">
+        <TrendingUp size={16} />
+        <span className="text-[10px] font-bold uppercase tracking-widest">Inactive share by period</span>
+      </div>
+      <div className="flex items-end gap-1.5 flex-1 min-w-[220px] h-16">
+        {trends.slice(-12).map(point => {
+          const value = share(point);
+          return (
+            <div
+              key={point.period}
+              className="flex-1 flex flex-col items-center justify-end gap-1 h-full"
+              title={`${point.period}: ${value}% inactive (${point.inactive} of ${point.records})`}
+            >
+              <div
+                className={cn("w-full rounded-t", value > 10 ? "bg-red-500/70" : "bg-[#5A7D4A]/70")}
+                style={{ height: `${Math.max(3, Math.min(100, value))}%` }}
+              />
+              <span className="text-[7px] font-bold uppercase text-black/40">{point.period.slice(2)}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-black/50">
+        {last.period}:{' '}
+        <span className={share(last) > 10 ? "text-red-600" : "text-emerald-600"}>{share(last)}%</span>
+        <span className="text-black/30"> ({delta >= 0 ? '+' : ''}{delta} pp)</span>
+      </div>
+    </div>
   );
 }
 

@@ -1,3 +1,5 @@
+export type EmployeeCategory = 'ACTIVE' | 'AWOL' | 'RESIGNED' | 'DROPPED_OUT' | 'TERMINATED' | 'OTHER';
+
 export interface EmployeeRecord {
   empCode: string;
   employeeName: string;
@@ -5,7 +7,7 @@ export interface EmployeeRecord {
   team: string;
   baseTeam: string;
   status: string;
-  category: 'ACTIVE' | 'AWOL' | 'RESIGNED' | 'DROPPED_OUT' | 'TERMINATED' | 'OTHER';
+  category: EmployeeCategory;
   basedHeadcount: string;
   endDate: string;
   attendance: Record<string, number | string>;
@@ -18,17 +20,34 @@ export interface ProcessedReport {
   attendanceColumns: string[];
 }
 
-export interface SavedReport {
-  id: number;
+/** Row shape returned by GET /api/reports (Neon `report_overview` view). */
+export interface ReportSummary {
+  id: string;
   fileName: string;
   period: string;
-  data: ProcessedReport;
+  source: string;
   createdAt: string;
+  records: number;
+  active: number;
+  awol: number;
+  resigned: number;
+  droppedOut: number;
+  terminated: number;
+  inactive: number;
 }
 
-export interface ReportSummary {
-  id: number;
-  fileName: string;
+/** Row shape returned by GET /api/trends (Neon `period_trend` view). */
+export interface TrendPoint {
   period: string;
-  createdAt: string;
+  records: number;
+  active: number;
+  inactive: number;
+  lastSaved: string;
+}
+
+export interface HealthResponse {
+  status: 'ok' | 'degraded';
+  database: { configured: boolean; connected: boolean; error?: string };
+  admin: { configured: boolean };
+  storage: string;
 }
