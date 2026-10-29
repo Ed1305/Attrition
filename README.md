@@ -75,6 +75,45 @@ npm run db:demo && npm run dev
 
 ---
 
+## 3b. Troubleshooting
+
+**`'tsx' is not recognized as an internal or external command`** (Windows) or
+`tsx: command not found` (macOS/Linux)
+
+`node_modules` is missing or was left half-installed — usually because an older
+version of this project depended on `better-sqlite3`, a native module that needs a
+C++ toolchain, so `npm install` aborted before creating `node_modules/.bin`.
+That dependency is gone now; a clean install fixes it:
+
+```powershell
+Remove-Item -Recurse -Force node_modules    # cmd: rmdir /s /q node_modules
+npm ci
+npm run db:setup
+```
+
+`npm run …` now runs a pre-flight check (`scripts/preflight.mjs`) that detects this and
+prints the fix instead of the bare "not recognized" error.
+
+**`DatabaseNotConfiguredError: DATABASE_URL is not set`**
+
+`.env.local` is missing or has no `DATABASE_URL`. Copy `.env.example` and paste the
+Neon **pooled** connection string (`…-pooler…neon.tech`).
+
+**`password authentication failed` / `ENOTFOUND`**
+
+Use the *pooled* host from Neon → Connect, and keep `?sslmode=require` on the URL.
+
+**Saving/uploading does nothing (401)**
+
+`ADMIN_PASSCODE` is not set on the server, or the session expired — click
+**Admin Login** again.
+
+**Port 3000 already in use**
+
+`PORT=3001 npm run dev` (PowerShell: `$env:PORT=3001; npm run dev`).
+
+---
+
 ## 4. Data model
 
 ```
