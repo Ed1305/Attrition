@@ -46,6 +46,7 @@ import {
   saveReport as saveReportApi,
 } from './lib/api';
 import { EmployeeRecord, ProcessedReport, ReportSummary, TrendPoint } from './types';
+import { extractPeriodFromFilename, parseRegister, type SheetInput } from './lib/parseRegister';
 
 type Tab = 'dashboard' | 'upload' | 'history' | 'documentation' | 'support';
 
@@ -299,45 +300,6 @@ export default function App() {
     }
   };
 
-  const extractPeriodFromFilename = (filename: string): string => {
-    const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-    const shortMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-    
-    let monthIndex = -1;
-    const lowerFilename = filename.toLowerCase();
-    
-    // Check for full month names first
-    for (let i = 0; i < months.length; i++) {
-      if (lowerFilename.includes(months[i])) {
-        monthIndex = i;
-        break;
-      }
-    }
-    
-    // Check for short month names if full not found
-    if (monthIndex === -1) {
-      for (let i = 0; i < shortMonths.length; i++) {
-        // use regex to match word boundaries for short months to avoid false positives like "march" matching "mar"
-        const regex = new RegExp(`\\b${shortMonths[i]}\\b`, 'i');
-        if (regex.test(lowerFilename)) {
-          monthIndex = i;
-          break;
-        }
-      }
-    }
-
-    const yearMatch = filename.match(/\b(20\d{2})\b/);
-    const year = yearMatch ? yearMatch[1] : new Date().getFullYear().toString();
-
-    if (monthIndex !== -1) {
-      return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
-    }
-
-    // Fallback to current year and month if no month found
-    const d = new Date();
-    return `${year}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  };
-
   const processExcel = async (file: File) => {
     setIsProcessing(true);
     setError(null);
@@ -349,270 +311,30 @@ export default function App() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       setCurrentReportId(null); // New upload, not from history
-      
-      const allRecords: EmployeeRecord[] = [];
-      let globalAttendanceColumns: string[] = [];
 
-      const sheetsToProcess = [
-        { name: 'INVNT CAPE TOWN', branch: 'INVNT CAPE TOWN' },
-        { name: 'ALPHA', branch: 'ALPHA' }
-      ];
+      const sheets: SheetInput[] = workbook.SheetNames.map((name) => ({
+        name,
+        rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '' }) as unknown[][],
+      }));
 
-      for (const sheetInfo of sheetsToProcess) {
-        const actualSheetName = workbook.SheetNames.find(
-          name => name.trim().toUpperCase() === sheetInfo.name.toUpperCase()
-        );
-        
-        if (!actualSheetName) continue;
-
-        const worksheet = workbook.Sheets[actualSheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' }) as any[][];
-        
-        let headerRowIdx = -1;
-        for (let i = 0; i < jsonData.length; i++) {
-          const row = jsonData[i];
-          if (row && row.some(cell => String(cell).toUpperCase().includes('EMP CODE'))) {
-            headerRowIdx = i;
-            break;
-          }
-        }
-
-        if (headerRowIdx === -1) continue;
-
-        const headerRow = jsonData[headerRowIdx];
-        const subHeaderRow = jsonData[headerRowIdx + 1] || [];
-        
-        const empCodeIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('EMP CODE'));
-        const nameIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('EMPLOYEE NAME'));
-        const startIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('START DATE'));
-        const teamColIdx = headerRow.findIndex((h: any) => {
-          const s = String(h).toUpperCase();
-          return s === 'TEAM' || s === 'TEAM NAME' || s.includes('TEAM');
-        });
-        const managerIdx = headerRow.findIndex((h: any) => String(h).toUpperCase().includes('MANAGER'));
-        const termIdx = headerRow.findIndex((h: any) => {
-          const s = String(h).toUpperCase().replace(/[^A-Z]/g, '');
-          return s === 'TERMINATIONDATE' || s.includes('TERMINATIONDATE') || s.includes('TERMDATE') || s.includes('TERMINATE') || s.includes('TERMINATION');
-        });
-
-        const startDayIdx = subHeaderRow.findIndex(h => String(h).trim() === '26');
-        let endDayIdx = -1;
-        if (startDayIdx !== -1) {
-          for (let j = startDayIdx; j < subHeaderRow.length; j++) {
-            if (String(subHeaderRow[j]).trim() === '25') {
-              endDayIdx = j;
-              break;
-            }
-          }
-        }
-
-        const attendanceHeaders: string[] = [];
-        if (startDayIdx !== -1 && endDayIdx !== -1) {
-          for (let j = startDayIdx; j <= endDayIdx; j++) {
-            const day = String(subHeaderRow[j]).trim();
-            const weekday = String(headerRow[j] || '').trim();
-            attendanceHeaders.push(`${weekday}(${day})`);
-          }
-        }
-
-        if (globalAttendanceColumns.length === 0) {
-          globalAttendanceColumns = attendanceHeaders;
-        }
-
-        let currentTeam = '';
-        let lastBaseTeam = '';
-        
-        const isAlpha = sheetInfo.branch === 'ALPHA';
-        const baseTeams = isAlpha 
-          ? ['TEAM AYABONGA', 'TEAM ISIPHO', 'TEAM KHAYALETHU', 'TEAM THANDUXOLO', 'ALPHA INCUBATION']
-          : ['TEAM PROSPER', 'TEAM SONWABILE', 'TEAM MOSES', 'INVNT INCUBATION', 'NOMBEKO'];
-        
-        const targetTeams = isAlpha
-          ? ['TEAM AYABONGA', 'TEAM ISIPHO', 'TEAM KHAYALETHU', 'TEAM THANDUXOLO', 'ALPHA INCUBATION', 'RESIGNED EMPLOYEES', 'AWOL EMPLOYEES', 'DROPPED OUT INCUBATION', 'TERMINATED']
-          : ['TEAM PROSPER', 'TEAM SONWABILE', 'TEAM MOSES', 'INVNT INCUBATION', 'RESIGNED EMPLOYEES', 'AWOLEMPLOYEES', 'AWOL EMPLOYEES', 'AWOL', 'DROPPED OUT TRAINING/INCUBATION', 'TERMINATED', 'NOMBEKO'];
-
-        const excludedValues = [
-          'FAILED PRACTICAL\'S', 'TEMPORARY LAID OFF', 'MATERNITY LEAVE', 
-          'EMPLOYEE CODE', 'EMPLOYEE NAME', 'START DATE', 'TERMINATION DATE'
-        ];
-
-        for (let i = headerRowIdx + 1; i < jsonData.length; i++) {
-          const row = jsonData[i];
-          if (!row || row.length === 0) continue;
-
-          const empCode = String(row[empCodeIdx] || '').trim();
-          const empName = String(row[nameIdx] || '').trim();
-          const rowString = row.join(' ').toUpperCase();
-          
-          const foundTeam = targetTeams.find(team => rowString.includes(team));
-          if (foundTeam && (empCode === '' || empCode.toUpperCase() === 'EMPLOYEE CODE')) {
-            currentTeam = foundTeam;
-            const upperFound = foundTeam.toUpperCase();
-            if (baseTeams.includes(upperFound)) {
-              lastBaseTeam = upperFound === 'NOMBEKO' ? 'INVNT INCUBATION' : upperFound;
-            }
-            continue;
-          }
-
-          const nameAsTeam = targetTeams.find(team => empName.toUpperCase() === team);
-          if (nameAsTeam && (empCode === '' || empCode.toUpperCase() === 'EMPLOYEE CODE')) {
-            currentTeam = nameAsTeam;
-            const upperNameTeam = nameAsTeam.toUpperCase();
-            if (baseTeams.includes(upperNameTeam)) {
-              lastBaseTeam = upperNameTeam === 'NOMBEKO' ? 'INVNT INCUBATION' : upperNameTeam;
-            }
-            continue;
-          }
-
-          if (currentTeam && empCode !== '' && empName !== '') {
-            const upperEmpCode = empCode.toUpperCase();
-            const upperEmpName = empName.toUpperCase();
-
-            if (upperEmpCode === 'EMPLOYEE CODE' || upperEmpName === 'EMPLOYEE NAME') continue;
-            if (excludedValues.some(val => upperEmpName.includes(val.toUpperCase()))) continue;
-            if (targetTeams.some(team => upperEmpName === team)) continue;
-
-            const rawEndDate = termIdx !== -1 ? row[termIdx] : null;
-            const hasTerminationDate = rawEndDate && String(rawEndDate).trim() !== '' && String(rawEndDate).trim().toUpperCase() !== 'N/A' && String(rawEndDate).trim().toUpperCase() !== 'NOT APPLICABLE';
-
-            const isInactive = currentTeam.toUpperCase().includes('RESIGNED') || 
-                              currentTeam.toUpperCase().includes('AWOL') ||
-                              currentTeam.toUpperCase().includes('DROPPED') ||
-                              currentTeam.toUpperCase().includes('TERMINATED') ||
-                              hasTerminationDate;
-            
-            const status = isInactive ? 'INACTIVE' : 'ACTIVE';
-            
-            let category: EmployeeRecord['category'] = 'ACTIVE';
-            if (currentTeam.toUpperCase().includes('RESIGNED')) category = 'RESIGNED';
-            else if (currentTeam.toUpperCase().includes('AWOL')) category = 'AWOL';
-            else if (currentTeam.toUpperCase().includes('DROPPED')) category = 'DROPPED_OUT';
-            else if (currentTeam.toUpperCase().includes('TERMINATED')) category = 'TERMINATED';
-            else if (hasTerminationDate) category = 'TERMINATED';
-
-            let baseTeam = '';
-            
-            // Branch specific team mapping
-            if (isAlpha) {
-              if (rowString.includes('AYABONGA')) baseTeam = 'TEAM AYABONGA';
-              else if (rowString.includes('ISIPHO')) baseTeam = 'TEAM ISIPHO';
-              else if (rowString.includes('KHAYALETHU')) baseTeam = 'TEAM KHAYALETHU';
-              else if (rowString.includes('THANDUXOLO')) baseTeam = 'TEAM THANDUXOLO';
-              else if (rowString.includes('INCUBATION')) baseTeam = 'ALPHA INCUBATION';
-            } else {
-              if (rowString.includes('MOSES')) baseTeam = 'TEAM MOSES';
-              else if (rowString.includes('PROSPER')) baseTeam = 'TEAM PROSPER';
-              else if (rowString.includes('SONWABILE')) baseTeam = 'TEAM SONWABILE';
-              else if (rowString.includes('INCUBATION') || rowString.includes('NOMBEKO')) baseTeam = 'INVNT INCUBATION';
-            }
-
-            if (!baseTeam && teamColIdx !== -1) {
-              const teamFromCol = String(row[teamColIdx] || '').toUpperCase();
-              if (teamFromCol) {
-                if (isAlpha) {
-                  if (teamFromCol.includes('AYABONGA')) baseTeam = 'TEAM AYABONGA';
-                  else if (teamFromCol.includes('ISIPHO')) baseTeam = 'TEAM ISIPHO';
-                  else if (teamFromCol.includes('KHAYALETHU')) baseTeam = 'TEAM KHAYALETHU';
-                  else if (teamFromCol.includes('THANDUXOLO')) baseTeam = 'TEAM THANDUXOLO';
-                  else if (teamFromCol.includes('INCUBATION')) baseTeam = 'ALPHA INCUBATION';
-                } else {
-                  if (teamFromCol.includes('NOMBEKO')) baseTeam = 'INVNT INCUBATION';
-                  else if (teamFromCol.includes('MOSES')) baseTeam = 'TEAM MOSES';
-                  else if (teamFromCol.includes('PROSPER')) baseTeam = 'TEAM PROSPER';
-                  else if (teamFromCol.includes('SONWABILE')) baseTeam = 'TEAM SONWABILE';
-                  else if (teamFromCol.includes('INCUBATION')) baseTeam = 'INVNT INCUBATION';
-                }
-              }
-            }
-
-            // Manager column logic for ALPHA inactive employees
-            if (isAlpha && isInactive && !baseTeam && managerIdx !== -1) {
-              const managerName = String(row[managerIdx] || '').toUpperCase();
-              if (managerName) {
-                if (managerName.includes('AYABONGA')) baseTeam = 'TEAM AYABONGA';
-                else if (managerName.includes('ISIPHO')) baseTeam = 'TEAM ISIPHO';
-                else if (managerName.includes('KHAYALETHU')) baseTeam = 'TEAM KHAYALETHU';
-                else if (managerName.includes('THANDUXOLO')) baseTeam = 'TEAM THANDUXOLO';
-                else if (managerName.includes('INCUBATION')) baseTeam = 'ALPHA INCUBATION';
-              }
-            }
-
-            if (!baseTeam) {
-              if (category === 'ACTIVE') {
-                baseTeam = currentTeam.toUpperCase();
-                if (!isAlpha && baseTeam === 'NOMBEKO') baseTeam = 'INVNT INCUBATION';
-              } else {
-                baseTeam = lastBaseTeam || 'UNASSIGNED';
-              }
-            }
-
-            // Normalizing baseTeam names
-            if (isAlpha) {
-              if (baseTeam.includes('AYABONGA')) baseTeam = 'TEAM AYABONGA';
-              else if (baseTeam.includes('ISIPHO')) baseTeam = 'TEAM ISIPHO';
-              else if (baseTeam.includes('KHAYALETHU')) baseTeam = 'TEAM KHAYALETHU';
-              else if (baseTeam.includes('THANDUXOLO')) baseTeam = 'TEAM THANDUXOLO';
-              else if (baseTeam.includes('INCUBATION')) baseTeam = 'ALPHA INCUBATION';
-            } else {
-              if (baseTeam.includes('MOSES')) baseTeam = 'TEAM MOSES';
-              else if (baseTeam.includes('PROSPER')) baseTeam = 'TEAM PROSPER';
-              else if (baseTeam.includes('SONWABILE')) baseTeam = 'TEAM SONWABILE';
-              else if (baseTeam.includes('INCUBATION')) baseTeam = 'INVNT INCUBATION';
-              else if (baseTeam.includes('NOMBEKO')) baseTeam = 'INVNT INCUBATION';
-            }
-
-            let displayTeam = currentTeam;
-            if (category === 'RESIGNED') displayTeam = 'RESIGNED EMP.';
-            else if (category === 'AWOL') displayTeam = 'AWOL EMP.';
-            else if (category === 'DROPPED_OUT') displayTeam = 'DROPPED OUT';
-            else if (category === 'TERMINATED') displayTeam = 'TERMINATED';
-            
-            const attendance: Record<string, number | string> = {};
-            if (startDayIdx !== -1 && endDayIdx !== -1) {
-              for (let j = startDayIdx; j <= endDayIdx; j++) {
-                const header = attendanceHeaders[j - startDayIdx];
-                const val = row[j];
-                const isPresent = val === 1 || String(val).trim() === '1' || String(val).trim().toUpperCase() === 'P';
-                attendance[header] = isPresent ? 1 : (val || 0);
-              }
-            }
-
-            const formattedEndDate = isInactive 
-              ? (rawEndDate && String(rawEndDate).trim() !== '' && String(rawEndDate).trim().toUpperCase() !== 'N/A' && String(rawEndDate).trim().toUpperCase() !== 'NOT APPLICABLE'
-                  ? (typeof rawEndDate === 'number' ? new Date(Math.round((rawEndDate - 25569) * 86400 * 1000)).toLocaleDateString('en-GB') : String(rawEndDate)) 
-                  : 'N/A')
-              : 'Not Applicable';
-
-            allRecords.push({
-              empCode: empCode,
-              employeeName: empName,
-              startDate: row[startIdx] ? (typeof row[startIdx] === 'number' ? new Date(Math.round((row[startIdx] - 25569) * 86400 * 1000)).toLocaleDateString('en-GB') : String(row[startIdx])) : 'N/A',
-              team: displayTeam,
-              baseTeam: baseTeam,
-              status: status,
-              category: category,
-              basedHeadcount: status,
-              endDate: formattedEndDate,
-              attendance,
-              branch: sheetInfo.branch
-            });
-          }
-        }
-      }
-
-      if (allRecords.length === 0) {
-        throw new Error(`Could not find valid data in "INVNT CAPE TOWN" or "ALPHA" sheets.`);
-      }
+      const result = parseRegister(sheets, file.name);
 
       setReport({
         fileName: file.name,
-        records: allRecords,
-        attendanceColumns: globalAttendanceColumns
+        records: result.records,
+        attendanceColumns: result.attendanceColumns,
       });
-      
-      const branches = Array.from(new Set(allRecords.map(r => r.branch)));
+
+      const branches = Array.from(new Set(result.records.map(r => r.branch)));
       if (branches.length > 0) {
         setSelectedBranch(branches[0]);
+      }
+
+      if (result.warnings.length > 0) {
+        console.warn('Register import warnings:', result.warnings);
+        showToast(result.warnings[0], 'error');
+      } else {
+        showToast(`Read ${result.records.length} agents from ${file.name}`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process Excel file');
@@ -818,6 +540,8 @@ export default function App() {
                 onLoadReport={loadReportFromHistory} 
                 report={report}
                 selectedPeriod={selectedPeriod}
+                setSelectedPeriod={setSelectedPeriod}
+                editablePeriod={currentReportId === null}
                 selectedBranch={selectedBranch}
                 setSelectedBranch={setSelectedBranch}
                 showSummary={showSummary}
@@ -842,6 +566,22 @@ export default function App() {
                   </div>
                   {report && (
                     <div className="flex flex-col md:flex-row gap-4 items-center">
+                      <div className="flex items-center gap-2">
+                        <label className="text-[9px] font-bold uppercase tracking-widest text-black/40">Period</label>
+                        <input
+                          type="month"
+                          value={selectedPeriod}
+                          onChange={(e) => setSelectedPeriod(e.target.value)}
+                          disabled={!!currentReportId}
+                          title={!currentReportId
+                            ? "Read from the file name — change it if the month is wrong"
+                            : "Period of the saved report"}
+                          className={cn(
+                            "bg-white border border-black/10 rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest",
+                            !!currentReportId && "opacity-60"
+                          )}
+                        />
+                      </div>
                       <div className="flex bg-white/5 p-1 rounded-full border border-black/5">
                         {Array.from(new Set(report.records.map(r => r.branch))).map(branch => (
                           <button
@@ -1112,6 +852,8 @@ function DashboardView({
   onLoadReport, 
   report, 
   selectedPeriod, 
+  setSelectedPeriod,
+  editablePeriod,
   selectedBranch, 
   setSelectedBranch,
   showSummary,
@@ -1130,6 +872,8 @@ function DashboardView({
   onLoadReport: (id: string) => void,
   report: ProcessedReport | null,
   selectedPeriod: string,
+  setSelectedPeriod: (p: string) => void,
+  editablePeriod: boolean,
   selectedBranch: string,
   setSelectedBranch: (b: string) => void,
   showSummary: boolean,
@@ -1169,6 +913,22 @@ function DashboardView({
         
         {report && (
           <div className="flex flex-col md:flex-row gap-4 items-center">
+            <div className="flex items-center gap-2">
+              <label className="text-[9px] font-bold uppercase tracking-widest text-black/40">Period</label>
+              <input
+                type="month"
+                value={selectedPeriod}
+                onChange={(e) => setSelectedPeriod(e.target.value)}
+                disabled={!editablePeriod}
+                title={editablePeriod
+                  ? "Read from the file name — change it if the month is wrong"
+                  : "Period of the saved report"}
+                className={cn(
+                  "bg-white border border-black/10 rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest",
+                  !editablePeriod && "opacity-60"
+                )}
+              />
+            </div>
             <div className="flex bg-white/5 p-1 rounded-full border border-black/5">
               {Array.from(new Set(report.records.map(r => r.branch))).map(branch => (
                 <button
