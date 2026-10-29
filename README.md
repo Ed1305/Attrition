@@ -86,10 +86,14 @@ C++ toolchain, so `npm install` aborted before creating `node_modules/.bin`.
 That dependency is gone now; a clean install fixes it:
 
 ```powershell
-Remove-Item -Recurse -Force node_modules    # cmd: rmdir /s /q node_modules
+if (Test-Path node_modules) { Remove-Item -Recurse -Force node_modules }
 npm ci
 npm run db:setup
 ```
+
+If `node_modules` is already gone, `Remove-Item` reports *"Cannot find path … because it
+does not exist"* — that is harmless, just run `npm ci`. (The `Test-Path` guard above, or
+cmd's `if exist node_modules rmdir /s /q node_modules`, avoids the noise.)
 
 `npm run …` now runs a pre-flight check (`scripts/preflight.mjs`) that detects this and
 prints the fix instead of the bare "not recognized" error.
