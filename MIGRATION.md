@@ -43,14 +43,30 @@ is safe to re-run.
 
 ## 2. Pull the existing rows out of Supabase
 
-**Option A — straight from Supabase (recommended).**
+Pick **one** of the three sources below. All of them end up in the same table.
+
+### Option A — REST API with a service-role key (fastest)
 
 Add the legacy credentials *temporarily* to `.env.local`:
 
 ```bash
-SUPABASE_URL=https://xxxxxxxx.supabase.co
+SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 ```
+
+> **Gotcha:** `.env.example` ships these two lines **commented out** (`# SUPABASE_URL=…`).
+> If you copied it to `.env.local`, remove the leading `#` — otherwise the importer reports
+> that the variables are still commented out.
+
+Where to find them: Supabase dashboard → **Project Settings → API**
+
+| Value in the dashboard | Variable |
+|---|---|
+| **Project URL** (`https://<ref>.supabase.co`) | `SUPABASE_URL` |
+| **service_role** secret (under *Project API keys*) | `SUPABASE_SERVICE_ROLE_KEY` |
+
+Use the **service_role** key, not `anon` — the table is not readable anonymously. It bypasses
+RLS, so keep it in `.env.local` only and delete it once the import is verified.
 
 Preview first, then write:
 
@@ -72,23 +88,36 @@ Migrated 8/8 report(s).
 The script pages through the REST API (200 rows/request), keeps each report's original
 `createdAt`, and tags imported rows with `source = 'migration'`.
 
-**Option B — from a JSON export.**
+### Option B — Postgres connection string (no API keys)
 
-If you ever exported the table (`select * from reports` → *Download CSV/JSON* in the Supabase
-table editor), feed the file directly:
+If you have the database password but not the dashboard:
 
 ```bash
+SUPABASE_DB_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
+npm run db:migrate -- --from-postgres --dry-run
+```
+
+(Connection string: Supabase → **Connect** → *Connection string*.) Reads
+`select * from reports` directly and normalises the column names.
+
+### Option C — export the table by hand (no credentials at all)
+
+Supabase dashboard → **SQL Editor** → run:
+
+```sql
+select json_agg(row_to_json(r)) as reports from public.reports r;
+```
+
+Copy the single `reports` cell (it is a JSON array), save it as `supabase-reports.json`, then:
+
+```bash
+npm run db:migrate -- --file supabase-reports.json --dry-run
 npm run db:migrate -- --file supabase-reports.json
 ```
 
-Accepted shapes: an array of rows, `{ reports: [...] }`, or `{ rows: [...] }`. Both `camelCase`
-(`fileName`, `createdAt`) and `snake_case` (`file_name`, `created_at`) columns work, and `data`
-may be either a JSON object or a JSON string.
-
-**Then remove `SUPABASE_*` from `.env.local` / your host** — nothing in the running app reads
-them any more.
-
----
+The table editor's *Export → JSON* works too. Accepted shapes: a bare array, or
+`{ "reports": [...] }` / `{ "rows": [...] }`; `fileName`/`file_name` and
+`createdAt`/`created_at` are both understood, and `data` may be an object or a JSON string.
 
 ## 3. What the importer refuses (on purpose)
 
