@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readdir } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
-import { createApiHandler, restoreApiPath } from '../api/index.ts';
+import { createApiHandler, restoreApiPath } from '../server/handler.ts';
 
 /**
  * Regression coverage for the deployment wiring that broke production:
@@ -21,6 +23,7 @@ import { createApiHandler, restoreApiPath } from '../api/index.ts';
  */
 
 const ROOT = new URL('../', import.meta.url);
+const execFileAsync = promisify(execFileCb);
 
 let server: ReturnType<typeof createServer>;
 let baseUrl: string;
@@ -123,6 +126,28 @@ describe('api handler (rewritten production URLs)', () => {
 });
 
 describe('deployment configuration', () => {
+  it('keeps the generated api/index.js in sync with server/handler.ts', async () => {
+    // Vercel compiles nothing for us: the deployed function IS this bundle, so
+    // a stale artifact silently ships old server code.
+    const tmp = new URL('../api/index.js.tmp', import.meta.url);
+    const { stdout } = await execFileAsync(process.execPath, [
+      new URL('../scripts/build-api.mjs', import.meta.url).pathname,
+      '--outfile',
+      tmp.pathname,
+    ]);
+    const [generated, committed] = await Promise.all([
+      readFile(tmp, 'utf8'),
+      readFile(new URL('../api/index.js', import.meta.url), 'utf8'),
+    ]);
+    await rm(tmp);
+    assert.equal(
+      generated,
+      committed,
+      `api/index.js is out of date — run \`npm run build:api\` (${stdout.trim()})`,
+    );
+  });
+
+
   it('routes every /api/* request to the single function, carrying the path', async () => {
     const config = JSON.parse(await readFile(new URL('vercel.json', ROOT), 'utf8'));
     assert.equal(config.rewrites[0].source, '/api/(.*)');
