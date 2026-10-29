@@ -1,6 +1,9 @@
-import createServer from "../server";
+import { createApp } from '../server/app';
 
-export default async (req: any, res: any) => {
-  const app = await createServer();
+// One Express app per lambda instance: the pg pool is created lazily on first
+// query and reused across warm invocations.
+const app = createApp();
+
+export default function handler(req: any, res: any) {
   return app(req, res);
-};
+}
