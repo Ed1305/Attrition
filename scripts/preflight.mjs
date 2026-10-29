@@ -52,12 +52,12 @@ if (required.length > 0) {
       '',
       '  Remove it first, then reinstall:',
       isWindows
-        ? '    rmdir /s /q node_modules    (PowerShell: Remove-Item -Recurse -Force node_modules)'
+        ? '    if exist node_modules rmdir /s /q node_modules'
         : '    rm -rf node_modules',
     );
   } else {
     lines.push(isWindows
-      ? '    rmdir /s /q node_modules    (PowerShell: Remove-Item -Recurse -Force node_modules)'
+      ? '    if exist node_modules rmdir /s /q node_modules'
       : '    rm -rf node_modules');
   }
 
